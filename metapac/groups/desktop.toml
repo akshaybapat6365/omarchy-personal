@@ -48,5 +48,8 @@ zenity = "*"
 
 [arch-paru]
 brave-origin-beta-bin = "*"
+editt-bin = "*"
 freetube-bin = "*"
 hidamari = "*"
+hyprwhspr = "*"
+omarchist-bin = "*"

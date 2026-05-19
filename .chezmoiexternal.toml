@@ -9,3 +9,12 @@
     args = ["--depth", "1"]
   [".local/share/ai-config".pull]
     args = ["--ff-only"]
+
+[".config/quickshell"]
+  type = "git-repo"
+  url  = "https://github.com/bjarneo/quickshell.git"
+  refreshPeriod = "168h"
+  [".config/quickshell".clone]
+    args = ["--depth", "1"]
+  [".config/quickshell".pull]
+    args = ["--ff-only"]
