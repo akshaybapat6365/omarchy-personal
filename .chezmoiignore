@@ -51,9 +51,10 @@ dot_local/bin/symlink_ccmonitor
 dot_local/bin/symlink_cava
 dot_local/bin/symlink_brave
 
-# ai-config-owned (managed via .chezmoiexternal.toml → akshaybapat6365/ai-config)
-dot_claude
-dot_claude/**
+# ai-config-owned dirs (managed via .chezmoiexternal.toml → akshaybapat6365/ai-config).
+# NOTE: dot_claude/ is intentionally tracked here (commit c17f5fd) for OMC hooks
+# + statusline + CLAUDE.md symlink that pair with this user's specific overlay,
+# distinct from ai-config's claude/ tree. Do NOT add dot_claude to ignores.
 dot_codex
 dot_codex/**
 dot_cursor
@@ -62,8 +63,8 @@ dot_gemini
 dot_gemini/**
 dot_cline
 dot_cline/**
-dot_local/share
-dot_local/share/**
+# dot_local/share/trackpad-tuner is tracked (commit c17f5fd). Other subdirs in
+# dot_local/share/ should also be allowed; nothing else lives there yet.
 
 # Runtime sockets / PID files / transient state that sometimes lives in ~/.config
 **/*.sock
