@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Variety wallpaper-setter — bridges Variety → swaybg → Aether on Hyprland.
+#
+# Pipeline:
+#   1. Variety calls us with the new wallpaper path as $1
+#   2. We re-point `~/.config/omarchy/current/background` (the symlink Omarchy
+#      uses) at the new file
+#   3. We restart swaybg so the static base wallpaper actually reflects the change
+#   4. `aether-bg-watcher.service` (already running, watches that symlink via
+#      inotify) detects the swap and runs `aether --generate <new>` automatically,
+#      regenerating the full system theme
+#
+# Net effect: Variety picks a wallpaper from its internet feeds → full Aether
+# re-theme cascade fires without any extra action.
+set -u
+
+WP="${1:-}"
+[ -z "$WP" ] && exit 1
+[ ! -f "$WP" ] && exit 1
+
+DEST="$HOME/.config/omarchy/current/background"
+
+# Re-point the symlink (or replace file if it isn't a symlink for any reason)
+if [ -L "$DEST" ] || [ ! -e "$DEST" ]; then
+    ln -sfn "$WP" "$DEST"
+else
+    # Real file at the path — overwrite by copy to avoid orphaning whatever
+    # is on disk
+    cp -f "$WP" "$DEST"
+fi
+
+# swaybg doesn't auto-reload on file change; only way to refresh is restart.
+# Brief overlap (new before old kill) avoids a flicker frame.
+( swaybg -i "$DEST" -m fill & ) >/dev/null 2>&1
+disown
+sleep 0.3
+pkill -SIGTERM -f "swaybg -i $DEST" 2>/dev/null | head -1 # kill all but the freshest
+# Note: `aether-bg-watcher.service` will fire on the symlink change and
+# regenerate the theme automatically. No need to call `aether --generate` here.
