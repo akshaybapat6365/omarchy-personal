@@ -1,7 +1,10 @@
 # metapac group: fonts
 # Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+# Updated 2026-05-19: added fontconfig + woff2-font-awesome from misc.toml
 
 [arch]
+fontconfig = "*"
 inter-font = "*"
 ttf-ia-writer = "*"
 ttf-jetbrains-mono-nerd = "*"
+woff2-font-awesome = "*"

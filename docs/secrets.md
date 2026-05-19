@@ -9,20 +9,31 @@ This repo never commits unencrypted secrets. All sensitive content is encrypted 
 
 ## First-time setup (one machine only)
 
+Completed on omarchy (2026-05-19). Commands actually run:
+
 ```bash
 # 1. Generate the age identity locally
 age-keygen -o ~/.config/chezmoi/age-identity.txt
+chmod 600 ~/.config/chezmoi/age-identity.txt
+# Public key: age1y4x7y07dtz7n26j3fgw79anjehw84gnx8nujqcl9hp235mgyjg8qqzqayp
 
-# 2. Note the public recipient (starts with age1...)
-cat ~/.config/chezmoi/age-identity.txt | grep -oE 'age1[a-z0-9]+'
+# 2. Update .chezmoi.toml.tmpl with the real recipient (done — hardcoded above)
 
-# 3. Store the IDENTITY (private key) in 1Password as a Secure Note
-#    Name: "age-omarchy"
-#    Field "private": paste the entire file content (incl. comment lines)
-#    Field "recipient": paste just the age1... public string
+# 3. Add [age] block to live ~/.config/chezmoi/chezmoi.toml (done)
 
-# 4. Update ~/.local/share/chezmoi/.chezmoi.toml.tmpl with the real recipient
-#    Replace REPLACE_AFTER_FIRST_AGE_KEYGEN with your age1... public string
+# 4. Encrypt wallhaven.json
+chezmoi add --encrypt ~/.config/aether/wallhaven.json
+# Source-side file: dot_config/aether/encrypted_wallhaven.json.age
+
+# 5. Store the identity in 1Password (PENDING — 1P not signed in at setup time)
+#    Run when 1P is available:
+eval $(op signin)
+op item create \
+  --category="Secure Note" \
+  --title="age-omarchy" \
+  --vault=Personal \
+  "private[password]=$(cat ~/.config/chezmoi/age-identity.txt)" \
+  "recipient[text]=age1y4x7y07dtz7n26j3fgw79anjehw84gnx8nujqcl9hp235mgyjg8qqzqayp"
 ```
 
 ## On a new machine

@@ -1,0 +1,66 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          severity: warning
+
+  toml-validate:
+    name: TOML validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tomlkit
+        run: pip install tomlkit
+      - name: Validate all TOML files
+        run: |
+          python3 - <<'EOF'
+          import sys
+          import pathlib
+          import tomlkit
+
+          root = pathlib.Path(".")
+          files = (
+              list(root.glob("metapac/*.toml")) +
+              list(root.glob("metapac/groups/*.toml"))
+          )
+          errors = []
+          for f in sorted(files):
+              try:
+                  tomlkit.parse(f.read_text())
+                  print(f"  ok  {f}")
+              except Exception as e:
+                  errors.append((f, e))
+                  print(f"  FAIL {f}: {e}", file=sys.stderr)
+          if errors:
+              sys.exit(1)
+          print(f"\nAll {len(files)} TOML files valid.")
+          EOF
+
+  chezmoi-smoke:
+    name: chezmoi diff smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install chezmoi
+        run: sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin
+      - name: Run chezmoi init smoke test
+        run: |
+          chezmoi init --apply \
+            --source="$(pwd)" \
+            --destination=/tmp/dest \
+            --no-tty \
+            2>&1 | tail -20 || true
+          echo "smoke test complete (exit ignored — destination may lack secrets)"

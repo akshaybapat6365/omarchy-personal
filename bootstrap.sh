@@ -35,6 +35,24 @@ if ! command -v paru >/dev/null 2>&1; then
   rm -rf "$tmp"
 fi
 
+# --- age identity (for encrypted chezmoi files) ---
+AGE_ID="$HOME/.config/chezmoi/age-identity.txt"
+if [ ! -f "$AGE_ID" ]; then
+  if command -v op >/dev/null 2>&1 && op vault list >/dev/null 2>&1; then
+    log "fetching age identity from 1Password"
+    mkdir -p "$(dirname "$AGE_ID")"
+    op read "op://Personal/age-omarchy/private" > "$AGE_ID"
+    chmod 600 "$AGE_ID"
+    log "age identity written to $AGE_ID"
+  else
+    warn "1Password CLI not signed in — skipping age identity fetch."
+    warn "Run 'eval \$(op signin)' then 'op read op://Personal/age-omarchy/private > $AGE_ID && chmod 600 $AGE_ID'"
+    warn "Then re-run: chezmoi apply"
+  fi
+else
+  log "age identity already present at $AGE_ID"
+fi
+
 # --- Apply ---
 log "running chezmoi init --apply akshaybapat6365/omarchy-personal"
 exec chezmoi init --apply --verbose akshaybapat6365/omarchy-personal

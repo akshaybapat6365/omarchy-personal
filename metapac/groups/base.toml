@@ -1,5 +1,6 @@
 # metapac group: base
 # Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+# Updated 2026-05-19: added lib/lang/db deps from misc.toml
 
 [arch]
 asdcontrol = "*"
@@ -22,9 +23,16 @@ inotify-tools = "*"
 jq = "*"
 lazygit = "*"
 less = "*"
+libpulse = "*"
+libqalculate = "*"
+libyaml = "*"
+luarocks = "*"
 man-db = "*"
+mariadb-libs = "*"
 polkit-gnome = "*"
+postgresql-libs = "*"
 ripgrep = "*"
+ruby = "*"
 starship = "*"
 sudo = "*"
 tldr = "*"

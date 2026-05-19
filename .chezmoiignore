@@ -40,8 +40,7 @@ dot_config/mako
 **/History
 **/History-journal
 
-# Secrets / API keys NOT yet encrypted (TODO: move to age-encrypted via 1Password)
-dot_config/aether/wallhaven.json
+# Secrets / API keys — now encrypted via age (see docs/secrets.md)
 
 # Symlinks whose absolute targets won't exist on a fresh machine until pkg installers run
 dot_local/bin/symlink_agent-browser

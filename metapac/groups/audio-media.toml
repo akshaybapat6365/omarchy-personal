@@ -1,15 +1,30 @@
 # metapac group: audio-media
 # Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+# Updated 2026-05-19: added media tools (obs, spotify, kdenlive, image/video utils) from misc.toml
 
 [arch]
 alsa-utils = "*"
 calf = "*"
 easyeffects = "*"
+ffmpegthumbnailer = "*"
+gpu-screen-recorder = "*"
+gst-plugin-pipewire = "*"
+imagemagick = "*"
+imv = "*"
+kdenlive = "*"
+lsp-plugins-lv2 = "*"
 mpd-mpris = "*"
 mpv = "*"
+obs-studio = "*"
+pamixer = "*"
 pipewire = "*"
 pipewire-alsa = "*"
 pipewire-jack = "*"
 pipewire-pulse = "*"
+playerctl = "*"
 sof-firmware = "*"
+spotify = "*"
+ueberzugpp = "*"
+viu = "*"
 wireplumber = "*"
+yt-dlp = "*"
