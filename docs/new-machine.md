@@ -22,15 +22,26 @@ What happens:
 | 4 | ~20s | `run_once_before_*` installs `metapac`, `age`, `1password-cli` via paru |
 | 5 | ~5s | Applies dotfile tree to `~/.config/` and `~/.local/bin/` |
 | 6 | **5-20 min** | `metapac sync` installs ~237 pkgs (pacman + AUR). The bulk of bootstrap time. |
-| 7 | ~30s | `mise install`, npm globals, cargo bins, pipx tools |
-| 8 | ~5s | `omarchy theme set aether`, font cache rebuild, systemd-user enables |
+| 7 | ~60s | `mise install`, npm globals, cargo bins, pipx tools, uv tools |
+| 8 | ~10s | `sudo systemctl enable --now` for 11 system services (avahi, bluetooth, cups, iwd, mullvad-daemon, power-profiles-daemon, sddm, tailscaled, thermald, ufw) |
+| 9 | ~5s | `omarchy theme set aether`, font cache rebuild, 17 systemd-user services enabled |
 
-## After bootstrap completes
+## After bootstrap completes — identity bootstrap
 
+The auto-bootstrap can't sign you into accounts. Run through **[identity-bootstrap.md](./identity-bootstrap.md)** for the interactive ~10 minutes of:
+
+1. `eval $(op signin)` — 1Password CLI
+2. `ssh-keygen` + `gh auth login` — GitHub access + SSH key upload
+3. `mullvad account set <token>` — VPN (account # in 1P)
+4. `sudo tailscale up` — Tailscale
+5. `atuin login` — shell-history sync (optional)
+6. GPG keys (optional, for signed commits)
+7. Bluetooth re-pair + WiFi passwords
+8. Brave + 1P browser extension
+
+Then:
 ```bash
-eval $(op signin)         # Unlock 1Password CLI (if you use age + 1P for secrets)
-gh auth login              # Restore GitHub access
-chezmoi apply              # Re-run if any 1P-gated secrets need to land
+chezmoi apply              # Re-run if any 1P-gated secrets need to land (Phase 2)
 sudo reboot                # Pick up systemd unit changes cleanly
 ```
 

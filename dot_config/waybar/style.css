@@ -132,23 +132,28 @@ tooltip {
 
 #custom-ccusage,
 #custom-codex-usage,
-#custom-opencode-usage {
+#custom-opencode-usage,
+#custom-openrouter-usage {
   min-width: 12px;
   margin: 0 7.5px;
   font-size: 11px;
 }
-#custom-ccusage { color: #8fbfdc; }
-#custom-codex-usage { color: #a3be8c; }
+#custom-ccusage        { color: #8fbfdc; }
+#custom-codex-usage    { color: #a3be8c; }
 #custom-opencode-usage { color: #b48ead; }
-#custom-ccusage.warm,
-#custom-codex-usage.warm,
-#custom-opencode-usage.warm { color: #d49a4a; }
-#custom-ccusage.hot,
-#custom-codex-usage.hot,
-#custom-opencode-usage.hot  { color: #c14a4a; }
+#custom-openrouter-usage { color: #d7ba7d; }
 
 /* omarchy-spend burn-rate classes (aether tokens) */
-#custom-ccusage.hot  { background: #805f4a; color: #e5dfd9; animation: pulse 0.5s infinite alternate; }
-#custom-ccusage.warm { background: #767f59; color: #000000; }
-#custom-ccusage.quiet { background: transparent; color: #888082; }
+#custom-ccusage.hot,
+#custom-codex-usage.hot,
+#custom-opencode-usage.hot,
+#custom-openrouter-usage.hot  { background: #805f4a; color: #e5dfd9; animation: pulse 0.5s infinite alternate; }
+#custom-ccusage.warm,
+#custom-codex-usage.warm,
+#custom-opencode-usage.warm,
+#custom-openrouter-usage.warm { background: #767f59; color: #000000; }
+#custom-ccusage.quiet,
+#custom-codex-usage.quiet,
+#custom-opencode-usage.quiet,
+#custom-openrouter-usage.quiet { background: transparent; color: #888082; }
 @keyframes pulse { from { opacity: 1.0; } to { opacity: 0.6; } }

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Enable the system-level services this user runs on the main machine.
+# Idempotent — skips services that are already enabled. Re-run safe.
+#
+# Hash to invalidate when service list changes:
+#   {{ list "avahi-daemon" "bluetooth" "cups" "cups-browsed" "iwd" "mullvad-daemon" "power-profiles-daemon" "sddm" "tailscaled" "thermald" "ufw" | toJson | sha256sum }}
+set -euo pipefail
+log() { printf '[chezmoi/systemd-system] %s\n' "$*"; }
+
+# Requires passwordless sudo or an interactive sudo session.
+sudo -n true 2>/dev/null || { log "sudo not available non-interactively; skipping system-service enable. Re-run after sudo is configured."; exit 0; }
+
+SERVICES=(
+  avahi-daemon.service           # mDNS / Bonjour
+  bluetooth.service              # Bluetooth stack
+  cups.service                   # printing
+  cups-browsed.service           # network printer discovery
+  iwd.service                    # WiFi backend
+  mullvad-daemon.service         # Mullvad VPN
+  power-profiles-daemon.service  # CPU scaling profiles
+  sddm.service                   # display manager
+  tailscaled.service             # Tailscale VPN
+  thermald.service               # Intel thermal daemon
+  ufw.service                    # firewall
+)
+
+for s in "${SERVICES[@]}"; do
+  unit_name=$(basename "$s")
+  if ! systemctl list-unit-files "$unit_name" 2>/dev/null | grep -q "$unit_name"; then
+    log "skip: $unit_name (unit not installed yet — metapac sync will install the package)"
+    continue
+  fi
+  if systemctl is-enabled "$unit_name" >/dev/null 2>&1; then
+    log "ok:   $unit_name (already enabled)"
+  else
+    log "enable: $unit_name"
+    sudo systemctl enable --now "$unit_name" 2>&1 | tail -1 || log "  failed; re-run manually"
+  fi
+done

@@ -197,21 +197,27 @@
     "tooltip": true
   },
   "custom/ccusage": {
-    "exec": "/home/akshaybapat/.local/bin/waybar-ccusage",
+    "exec": "/home/akshaybapat/.local/bin/omarchy-spend --waybar claude",
     "return-type": "json",
     "interval": 60,
-    "on-click": "/home/akshaybapat/.local/bin/omarchy-ccusage-report"
+    "on-click": "/home/akshaybapat/.local/bin/omarchy-spend"
   },
   "custom/codex-usage": {
-    "exec": "/home/akshaybapat/.local/bin/waybar-codex-usage",
+    "exec": "/home/akshaybapat/.local/bin/omarchy-spend --waybar codex",
     "return-type": "json",
     "interval": 60,
-    "on-click": "/home/akshaybapat/.local/bin/omarchy-ccusage-report"
+    "on-click": "/home/akshaybapat/.local/bin/omarchy-spend"
   },
   "custom/opencode-usage": {
-    "exec": "/home/akshaybapat/.local/bin/waybar-opencode-usage",
+    "exec": "/home/akshaybapat/.local/bin/omarchy-spend --waybar opencode",
     "return-type": "json",
     "interval": 60,
-    "on-click": "/home/akshaybapat/.local/bin/omarchy-ccusage-report"
+    "on-click": "/home/akshaybapat/.local/bin/omarchy-spend"
+  },
+  "custom/openrouter-usage": {
+    "exec": "/home/akshaybapat/.local/bin/omarchy-spend --waybar openrouter",
+    "return-type": "json",
+    "interval": 60,
+    "on-click": "/home/akshaybapat/.local/bin/omarchy-spend"
   }
 }

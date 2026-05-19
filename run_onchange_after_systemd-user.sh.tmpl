@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
 # Enable the systemd-user services this user runs on the main machine.
 # Re-runs whenever this list changes:
-#   {{ list "aether-bg-watcher" "codex-update-manager" "elephant" "espanso" "fusuma" "hermes-chromium-cdp" "mpd-mpris" "mpd" "omarchy-ac-sleep-inhibitor" "omarchy-recover-internal-monitor" "rinertia" "skwd-daemon" "swayosd-server" "voxtype" "ydotool-local" "wireplumber" | toJson | sha256sum }}
+#   {{ list "aether-bg-watcher" "codex-update-manager" "elephant" "espanso" "fusuma" "hermes-chromium-cdp" "mpd-mpris" "mpd" "omarchy-ac-sleep-inhibitor" "omarchy-recover-internal-monitor" "rinertia" "skwd-daemon" "swayosd-server" "voxtype" "ydotool-local" "wireplumber" "xdg-user-dirs" | toJson | sha256sum }}
 set -euo pipefail
 log() { printf '[chezmoi/systemd-user] %s\n' "$*"; }
 
 # Comment out any service that doesn't apply to a given machine.
 SERVICES=(
   aether-bg-watcher.service
+  codex-update-manager.service
+  elephant.service
   espanso.service
   fusuma.service
+  hermes-chromium-cdp.service
   mpd-mpris.service
   mpd.service
   omarchy-ac-sleep-inhibitor.service
   omarchy-recover-internal-monitor.service
   rinertia.service
+  skwd-daemon.service
   swayosd-server.service
+  voxtype.service
   wireplumber.service
+  xdg-user-dirs.service
+  ydotool-local.service
 )
 
 # Enable each service if its unit file exists. Failure is non-fatal (some

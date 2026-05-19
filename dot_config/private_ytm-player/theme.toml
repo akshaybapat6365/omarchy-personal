@@ -1,0 +1,35 @@
+# Phase-9 theme overrides for ytm-player.
+# Sits on top of whichever Textual base theme is active (default: ytm-dark).
+# Switch base theme inside ytm via the in-app theme picker (/theme command
+# or settings menu) — choices include: tokyo-night, catppuccin-mocha,
+# dracula, gruvbox, nord, rose-pine, monokai, flexoki, etc.
+#
+# These overrides accent the active Omarchy "hinterlands" palette (greys with
+# a cool-cyan accent) while bringing some life to the playback bar + progress
+# row + lyrics area.
+
+[colors]
+# Base palette (overrides the Textual theme's defaults for these specific keys)
+background  = "#161616"
+foreground  = "#fff0d4"
+primary     = "#7dcfff"
+secondary   = "#bb9af7"
+accent      = "#f29c38"
+success     = "#9ece6a"
+warning     = "#e0af68"
+error       = "#f7768e"
+surface     = "#1a1b26"
+border      = "#414868"
+muted_text  = "#565f89"
+text        = "#fff0d4"
+
+# App-specific (the ones that most affect "feel")
+playback_bar_bg  = "#11121d"
+active_tab       = "#f29c38"
+inactive_tab     = "#565f89"
+selected_item    = "#3d59a1"
+progress_filled  = "#7dcfff"
+progress_empty   = "#414868"
+lyrics_played    = "#565f89"
+lyrics_current   = "#f29c38"
+lyrics_upcoming  = "#bb9af7"

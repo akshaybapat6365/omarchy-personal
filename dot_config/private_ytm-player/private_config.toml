@@ -1,0 +1,87 @@
+[general]
+startup_page = "library"
+playback_bar_position = "bottom"
+brand_account_id = ""
+check_for_updates = true
+
+[playback]
+audio_quality = "high"
+autoplay = true
+prefer_audio = true
+default_volume = 80
+seek_step = 5
+gapless = true
+api_timeout = 15
+resume_on_launch = true
+
+[yt_dlp]
+cookies_file = "/home/akshaybapat/.local/state/omarchy-music/youtube.cookies.txt"
+remote_components = ""
+js_runtimes = ""
+
+[search]
+default_mode = "music"
+max_history = 500
+predictive = true
+
+[cache]
+enabled = true
+max_size_mb = 1024
+prefetch_next = true
+location = ""
+
+[ui]
+album_art = true
+border_style = "rounded"
+progress_style = "block"
+sidebar_width = 30
+col_index = 4
+col_title = 0
+col_artist = 0
+col_album = 0
+col_duration = 8
+bidi_mode = "auto"
+show_selection_info = true
+home_shelves = 3
+region = "GB"
+sidebar_overflow = "truncate"
+show_sidebar = true
+show_playlists_tab = true
+show_artist_column = true
+# Ghostty is the canonical terminal surface for the TUI path and supports the
+# kitty graphics protocol, so prefer full-resolution cover art there.
+album_art_protocol = "kitty"
+# Keep this explicit for now. The auto-theme path is available in the fork, but
+# stays off until it is validated against longer real-world sessions.
+auto_theme_from_album_art = false
+
+[notifications]
+enabled = true
+timeout_seconds = 5
+format = "{title} — {artist}"
+
+[mpris]
+# Phase 11 — disabled to avoid org.mpris.MediaPlayer2 bus collision with
+# th-ch/youtube-music (now the primary music app). ytm-player still functions
+# as Super+Alt+M TUI fallback; just doesn't claim the MPRIS bus.
+enabled = false
+
+[lyrics]
+transliteration = false
+
+[discord]
+enabled = false
+
+[lastfm]
+enabled = false
+api_key = ""
+api_secret = ""
+session_key = ""
+username = ""
+password_hash = ""
+
+[logging]
+level = "WARNING"
+max_bytes = 5242880
+backup_count = 3
+keep_crashes = 10

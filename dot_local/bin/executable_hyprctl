@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# hyprctl wrapper for this Omarchy session.
+# Fixes stale HYPRLAND_INSTANCE_SIGNATURE after Hyprland watchdog recovery.
+set -euo pipefail
+
+for arg in "$@"; do
+  case "$arg" in
+    -i|--instance|--instance=*)
+      exec /usr/bin/hyprctl "$@"
+      ;;
+  esac
+done
+
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr"
+latest_sig=""
+if [ -d "$runtime_dir" ]; then
+  latest_sig=$(find "$runtime_dir" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %f\n' 2>/dev/null | sort -nr | awk 'NR==1{print $2}')
+fi
+
+if [ -n "$latest_sig" ]; then
+  export HYPRLAND_INSTANCE_SIGNATURE="$latest_sig"
+fi
+
+exec /usr/bin/hyprctl "$@"
