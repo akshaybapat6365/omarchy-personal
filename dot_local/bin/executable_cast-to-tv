@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# cast-to-tv — launch gnome-network-displays for Miracast casting (e.g., to an EZMira/MiraScreen dongle).
+#
+# Why this script exists:
+#   This machine uses `iwd` as its WiFi backend, but `gnome-network-displays`
+#   only speaks to `wpa_supplicant`'s D-Bus P2P API. We temporarily swap to
+#   wpa_supplicant, run the cast UI, then swap back to iwd on exit.
+#
+# Trade-offs: your WiFi connection drops twice (during each swap). Direct HDMI
+# is faster, higher quality, and lower latency. Use this only when wired isn't
+# an option.
+#
+# Usage:
+#   cast-to-tv
+#
+# Press Ctrl+C in this terminal (or close the gnome-network-displays window)
+# to exit and restore iwd.
+
+set -euo pipefail
+BLUE=$'\033[1;34m'; YELLOW=$'\033[1;33m'; RED=$'\033[1;31m'; NC=$'\033[0m'
+log()  { printf '%s[cast-to-tv]%s %s\n' "$BLUE"   "$NC" "$*"; }
+warn() { printf '%s[cast-to-tv]%s %s\n' "$YELLOW" "$NC" "$*"; }
+die()  { printf '%s[cast-to-tv ERROR]%s %s\n' "$RED" "$NC" "$*" >&2; exit 1; }
+
+command -v gnome-network-displays >/dev/null || die "gnome-network-displays not installed (paru -S gnome-network-displays)"
+command -v wpa_supplicant         >/dev/null || die "wpa_supplicant not installed"
+
+restore_iwd() {
+  warn "restoring iwd…"
+  sudo systemctl stop wpa_supplicant 2>/dev/null || true
+  sudo systemctl start iwd          2>/dev/null || true
+  # Bounce the radio so iwd re-scans
+  sleep 1 || true
+  log "iwd restored. Your normal WiFi should reconnect within a few seconds."
+}
+trap restore_iwd EXIT INT TERM
+
+log "swapping iwd -> wpa_supplicant (your WiFi will drop briefly)"
+sudo systemctl stop iwd
+sudo systemctl start wpa_supplicant
+
+log "launching gnome-network-displays (look for your EZMira/MiraScreen device)"
+log "tip: the receiver shows up under its WiFi-Direct SSID, not its name"
+gnome-network-displays || warn "cast UI exited with non-zero status"
+
+# Trap will handle the restore on normal exit too

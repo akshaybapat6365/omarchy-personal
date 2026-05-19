@@ -2,6 +2,9 @@
 # Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
 
 [arch]
+gnome-network-displays = "*"
+gst-plugin-va = "*"
+wpa_supplicant = "*"
 1password-beta = "*"
 1password-cli = "*"
 aether = "*"
