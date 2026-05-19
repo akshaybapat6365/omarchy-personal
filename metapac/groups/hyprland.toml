@@ -1,0 +1,25 @@
+# metapac group: hyprland
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+cliphist = "*"
+hypridle = "*"
+hyprland = "*"
+hyprland-guiutils = "*"
+hyprland-preview-share-picker = "*"
+hyprlock = "*"
+hyprpicker = "*"
+hyprsunset = "*"
+mako = "*"
+noto-fonts = "*"
+noto-fonts-cjk = "*"
+noto-fonts-emoji = "*"
+qt5-wayland = "*"
+qt6-wayland = "*"
+waybar = "*"
+xdg-desktop-portal-hyprland = "*"
+
+[arch-paru]
+hyprmon-bin = "*"
+omaclip-bin = "*"
+waypaper = "*"

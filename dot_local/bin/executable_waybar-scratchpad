@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Waybar custom module: AI scratchpad indicator
+# Lights up when any of claude/codex/opencode/hermes scratchpads exist; tooltip lists active ones.
+
+set -euo pipefail
+
+CLIENTS=$(hyprctl clients -j 2>/dev/null || echo "[]")
+ACTIVE=()
+for tool in claude codex opencode hermes; do
+  if echo "$CLIENTS" | grep -q "\"class\": \"ai-$tool\""; then
+    ACTIVE+=("$tool")
+  fi
+done
+
+if (( ${#ACTIVE[@]} == 0 )); then
+  echo '{"text":"󱚤","tooltip":"AI scratchpads inactive\\nSuper+\\\\ Claude · Super+Alt+\\\\ Codex · Super+Shift+\\\\ opencode · Super+Ctrl+\\\\ Hermes","class":"inactive"}'
+else
+  COUNT=${#ACTIVE[@]}
+  LIST=$(IFS=', '; echo "${ACTIVE[*]}")
+  printf '{"text":"󱚣 %d","tooltip":"AI scratchpads active: %s\\nSuper+\\\\ Claude · Super+Alt+\\\\ Codex · Super+Shift+\\\\ opencode · Super+Ctrl+\\\\ Hermes","class":"active"}\n' "$COUNT" "$LIST"
+fi

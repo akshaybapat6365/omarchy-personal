@@ -1,0 +1,27 @@
+# Local-only artifacts
+*.bak
+*.tmp
+*.swp
+*.swo
+.DS_Store
+node_modules/
+
+# Anything generated in the working tree that shouldn't be tracked
+.chezmoi.metadata.json
+
+# Per-user secrets that should never be committed even by accident
+**/age-identity.txt
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/id_rsa*
+**/id_ed25519*
+
+# OMC runtime state (machine-local; gets created by hooks during sessions)
+.omc/
+
+# chezmoi cache state (machine-local)
+.chezmoiscriptstate/
+

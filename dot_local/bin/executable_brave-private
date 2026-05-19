@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+brave_root="${HOME}/.local/share/brave-local/opt/brave-bin"
+brave_bin="${brave_root}/brave"
+
+if [[ ! -x "${brave_bin}" ]]; then
+  printf 'Brave binary not found at %s\n' "${brave_bin}" >&2
+  exit 127
+fi
+
+runtime_base="${XDG_RUNTIME_DIR:-/tmp}/brave-private-${USER}"
+mkdir -p "${runtime_base}"
+profile="$(mktemp -d "${runtime_base}/profile.XXXXXX")"
+
+cleanup() {
+  rm -rf "${profile}"
+}
+trap cleanup EXIT HUP INT TERM
+
+mkdir -p "${profile}/Default"
+
+cat > "${profile}/Local State" <<'JSON'
+{
+  "browser": {
+    "enabled_labs_experiments": []
+  },
+  "brave": {
+    "rewards": {
+      "enabled": false
+    },
+    "wallet": {
+      "show_wallet_icon_on_toolbar": false
+    }
+  },
+  "dns_over_https": {
+    "mode": "secure"
+  }
+}
+JSON
+
+cat > "${profile}/Default/Preferences" <<'JSON'
+{
+  "alternate_error_pages": {
+    "enabled": false
+  },
+  "autofill": {
+    "address_enabled": false,
+    "credit_card_enabled": false,
+    "profile_enabled": false
+  },
+  "brave": {
+    "brave_ads": {
+      "enabled": false
+    },
+    "ipfs": {
+      "resolve_method": 0
+    },
+    "rewards": {
+      "enabled": false
+    },
+    "webtorrent_enabled": false
+  },
+  "credentials_enable_service": false,
+  "dns_over_https": {
+    "mode": "secure"
+  },
+  "intl": {
+    "accept_languages": "en-US,en"
+  },
+  "net": {
+    "network_prediction_options": 2
+  },
+  "profile": {
+    "password_manager_enabled": false
+  },
+  "safebrowsing": {
+    "enabled": false,
+    "enhanced": false
+  },
+  "search": {
+    "suggest_enabled": false
+  },
+  "signin": {
+    "allowed": false
+  },
+  "sync_promo": {
+    "show_on_first_run_allowed": false
+  }
+}
+JSON
+
+export CHROME_VERSION_EXTRA=stable
+
+"${brave_bin}" \
+  --user-data-dir="${profile}" \
+  --incognito \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-sync \
+  --disable-background-networking \
+  --disable-component-update \
+  --disable-domain-reliability \
+  --disable-features=AutofillServerCommunication,InterestFeedContentSuggestions,MediaRouter,OptimizationHints,PrivacySandboxAdsAPIs \
+  "$@"

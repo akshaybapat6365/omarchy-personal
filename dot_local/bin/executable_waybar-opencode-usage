@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Waybar custom module: today's OpenCode token spend (via ccusage)
+set -euo pipefail
+
+export PATH="$HOME/.local/share/mise/installs/node/25.9.0/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+CCUSAGE_BIN=$(command -v ccusage || true)
+TODAY=$(date +%Y-%m-%d)
+
+if [[ -z "$CCUSAGE_BIN" ]]; then
+  jq -cn --arg text "O $0" --arg tooltip "OpenCode usage unavailable: ccusage not found" --arg class "hot" '{text: $text, tooltip: $tooltip, class: $class}'
+  exit 0
+fi
+
+OC_DATA=$("$CCUSAGE_BIN" opencode daily --json 2>/dev/null || printf '{}')
+OC_TODAY=$(printf '%s' "$OC_DATA" | jq -r --arg today "$TODAY" '([.daily[]? | select((.date // .period) == $today) | (.totalCost // 0)] | add) // 0' 2>/dev/null)
+OC_TOTAL=$(printf '%s' "$OC_DATA" | jq -r '(.totals.totalCost // 0)' 2>/dev/null)
+OC_TOKENS=$(printf '%s' "$OC_DATA" | jq -r --arg today "$TODAY" '([.daily[]? | select((.date // .period) == $today) | (.totalTokens // 0)] | add) // 0' 2>/dev/null)
+
+OC_TODAY=${OC_TODAY:-0}
+OC_TOTAL=${OC_TOTAL:-0}
+OC_TOKENS=${OC_TOKENS:-0}
+
+TODAY_FMT=$(printf "%.2f" "$OC_TODAY")
+OC_TODAY_FMT=$(printf "%.2f" "$OC_TODAY")
+OC_TOTAL_FMT=$(printf "%.2f" "$OC_TOTAL")
+TOKENS_FMT=$(awk -v n="$OC_TOKENS" 'BEGIN { if (n >= 1000000000) printf "%.1fB", n/1000000000; else if (n >= 1000000) printf "%.1fM", n/1000000; else if (n >= 1000) printf "%.0fk", n/1000; else printf "%d", n }')
+
+CLASS="quiet"
+awk "BEGIN { exit !($OC_TODAY > 5)  }" && CLASS="warm"
+awk "BEGIN { exit !($OC_TODAY > 15) }" && CLASS="hot"
+
+jq -cn \
+  --arg text "O \$${TODAY_FMT}" \
+  --arg tooltip "$(printf 'OpenCode today: $%s\nTokens: %s\nAll-time OpenCode: $%s\n\nClick to open AI spend dashboard' "$OC_TODAY_FMT" "$TOKENS_FMT" "$OC_TOTAL_FMT")" \
+  --arg class "$CLASS" \
+  '{text: $text, tooltip: $tooltip, class: $class}'

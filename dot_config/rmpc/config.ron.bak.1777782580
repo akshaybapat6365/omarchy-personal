@@ -1,0 +1,12 @@
+#![enable(implicit_some)]
+(
+    address: "/home/akshaybapat/.local/state/mpd/socket",
+    cache_dir: Some("/home/akshaybapat/Music/.rmpc-ytdlp-cache"),
+    enable_mouse: true,
+    auto_open_downloads: true,
+    max_fps: 60,
+    extra_yt_dlp_args: [
+        "--sponsorblock-remove",
+        "sponsor,selfpromo",
+    ],
+)

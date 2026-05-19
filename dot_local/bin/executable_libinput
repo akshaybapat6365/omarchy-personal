@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$HOME/.local/lib/libinput-tools/root"
+export PYTHONPATH="$ROOT/usr/lib/python3.14/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+export PATH="$ROOT/usr/lib/libinput:$PATH"
+
+exec "$ROOT/usr/bin/libinput" "$@"

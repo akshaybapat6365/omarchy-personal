@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$HOME/code/ytm-player-fork"
+OMUSIC_ROOT="$HOME/code/omarchy-music"
+ELECTRON_CONFIG="$HOME/.config/YouTube Music/config.json"
+CUSTOM_CSS="$HOME/.config/YouTube Music/custom/css/custom.css"
+APPIMAGE="$HOME/.local/share/youtube-music/youtube-music.AppImage"
+EXTRACT_DIR="/tmp/pear-app-src"
+ASAR_DIR="/tmp/pear-app-asar"
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || {
+    printf 'Missing required command: %s\n' "$1" >&2
+    exit 1
+  }
+}
+
+check_file() {
+  [[ -f "$1" ]] || {
+    printf 'Missing required file: %s\n' "$1" >&2
+    exit 1
+  }
+}
+
+check_rg() {
+  local pattern="$1"
+  local file="$2"
+  rg -F "$pattern" "$file" >/dev/null || {
+    printf 'Missing expected contract in %s: %s\n' "$file" "$pattern" >&2
+    exit 1
+  }
+}
+
+check_no_rg() {
+  local pattern="$1"
+  local file="$2"
+  if rg -F "$pattern" "$file" >/dev/null; then
+    printf 'Unexpected stale contract in %s: %s\n' "$file" "$pattern" >&2
+    exit 1
+  fi
+}
+
+printf '== Shell syntax ==\n'
+bash -n "$HOME/.local/bin/music-launch"
+bash -n "$HOME/.local/bin/omusic"
+bash -n "$HOME/.local/bin/music-open-in-tui"
+bash -n "$HOME/.local/bin/music-current-url"
+bash -n "$HOME/.local/bin/music-stop"
+printf 'ok\n\n'
+
+printf '== Music bridge script contracts ==\n'
+need rg
+check_no_rg 'ytm now --json' "$HOME/.local/bin/music-current-url"
+check_rg 'ytm now 2>/dev/null' "$HOME/.local/bin/music-current-url"
+check_no_rg 'ghostty +new-window -e bash -lc '\''ytm'\''' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'ytm_status_ready' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'ytm queue add' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'ytm play' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'YTM_PID_FILE' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'CURRENT_URL_HELPER' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'MUSIC_LAUNCH=' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'OMUSIC_BIN=' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg '"$MUSIC_LAUNCH" tui' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'launch_tui_if_needed' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'wait_for_tui' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'capture_new_tui_window' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'launch_tui_if_needed || true' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'focus_tui || true' "$HOME/.local/bin/music-open-in-tui"
+check_no_rg 'dispatch focuswindow "address:$addr" >/dev/null 2>&1 || true' "$HOME/.local/bin/music-open-in-tui"
+check_rg 'org.omarchy.music-tui' "$HOME/.local/bin/music-stop"
+check_rg 'org.omarchy.music' "$HOME/.local/bin/music-stop"
+check_rg '/omusic( |$)' "$HOME/.local/bin/music-stop"
+printf 'bridge contracts verified\n\n'
+
+printf '== Hyprland config ==\n'
+need hyprctl
+hyprctl configerrors >/tmp/music-verify-configerrors.out
+if [[ -n "$(tr -d '[:space:]' < /tmp/music-verify-configerrors.out)" ]]; then
+  cat /tmp/music-verify-configerrors.out >&2
+  exit 1
+fi
+hyprctl binds -j \
+  | jq -r '.[] | select((.description // "") | test("Music|ytm|YouTube"; "i")) | [.description,.dispatcher,.arg] | @tsv' \
+  >/tmp/music-verify-binds.out
+cat /tmp/music-verify-binds.out
+while IFS= read -r expected; do
+  [[ -n "$expected" ]] || continue
+  grep -Fqx "$expected" /tmp/music-verify-binds.out || {
+    printf 'Missing expected music bind: %s\n' "$expected" >&2
+    exit 1
+  }
+done <<EOF
+Music (auto)	exec	$HOME/.local/bin/music-launch auto
+Music (tui)	exec	$HOME/.local/bin/music-launch tui
+Music (electron)	exec	$HOME/.local/bin/music-launch electron
+Stop all music	exec	$HOME/.local/bin/music-stop
+EOF
+
+jq -e --arg home "$HOME" '
+  any(.[]; .modmask == 64 and .key == "M" and .description == "Music (auto)" and .dispatcher == "exec" and .arg == ($home + "/.local/bin/music-launch auto"))
+  and any(.[]; .modmask == 72 and .key == "M" and .description == "Music (tui)" and .dispatcher == "exec" and .arg == ($home + "/.local/bin/music-launch tui"))
+  and any(.[]; .modmask == 68 and .key == "M" and .description == "Music (electron)" and .dispatcher == "exec" and .arg == ($home + "/.local/bin/music-launch electron"))
+  and any(.[]; .modmask == 73 and .key == "M" and .description == "Stop all music" and .dispatcher == "exec" and .arg == ($home + "/.local/bin/music-stop"))
+' < <(hyprctl binds -j) >/dev/null || {
+  printf 'Live SUPER+M music chord contract is not the expected auto/tui/electron/stop layout.\n' >&2
+  exit 1
+}
+printf '\n'
+
+printf '== Omarchy launcher integration contract ==\n'
+check_rg 'TUI_CLASS="org.omarchy.music-tui"' "$HOME/.local/bin/music-launch"
+check_rg 'command -v hyprctl >/dev/null 2>&1 || return 1' "$HOME/.local/bin/music-launch"
+check_rg 'OMUSIC_BIN="$HOME/.local/bin/omusic"' "$HOME/.local/bin/music-launch"
+check_rg 'OMUSIC_VISUALIZER=cava OMUSIC_TERMINAL_IMAGES=1' "$HOME/.local/bin/music-launch"
+check_rg '[float; size 1400 860; center]' "$HOME/.local/bin/music-launch"
+check_rg 'remember_surface tui' "$HOME/.local/bin/music-launch"
+check_rg 'focus_window_by_class "$TUI_CLASS"' "$HOME/.local/bin/music-launch"
+check_rg 'command -v youtube-music' "$HOME/.local/bin/music-launch"
+check_rg 'preferred="tui"' "$HOME/.local/bin/music-launch"
+check_no_rg 'read_last_surface' "$HOME/.local/bin/music-launch"
+check_no_rg 'launch_tui || launch_electron' "$HOME/.local/bin/music-launch"
+check_no_rg 'launch_electron || launch_tui' "$HOME/.local/bin/music-launch"
+check_no_rg 'ytm_status_ready' "$HOME/.local/bin/music-launch"
+check_no_rg 'ghostty +new-window -e bash -lc '\''ytm'\''' "$HOME/.local/bin/music-launch"
+check_rg 'org.omarchy.music-tui' "$HOME/.local/bin/music-stop"
+check_rg 'org.omarchy.music' "$HOME/.local/bin/music-stop"
+check_rg 'omusic-tui' "$HOME/.local/bin/music-stop"
+check_rg 'uv run omusic' "$HOME/.local/bin/music-stop"
+check_rg '/omusic( |$)' "$HOME/.local/bin/music-stop"
+check_rg 'rm -f "$ytm_pid_file"' "$HOME/.local/bin/music-stop"
+printf 'launcher/stop contracts verified\n\n'
+
+printf '== Electron config ==\n'
+need jq
+check_file "$ELECTRON_CONFIG"
+check_file "$CUSTOM_CSS"
+jq . "$ELECTRON_CONFIG" >/dev/null
+theme_path="$(jq -r '.options.themes[0] // empty' "$ELECTRON_CONFIG")"
+if [[ "$theme_path" != "$CUSTOM_CSS" ]]; then
+  printf 'Unexpected custom CSS theme path: %s\n' "$theme_path" >&2
+  exit 1
+fi
+printf 'theme path ok: %s\n\n' "$theme_path"
+
+printf '== Electron source contract ==\n'
+need npx
+rm -rf "$EXTRACT_DIR" "$ASAR_DIR"
+mkdir -p "$EXTRACT_DIR"
+check_file "$APPIMAGE"
+(cd "$EXTRACT_DIR" && "$APPIMAGE" --appimage-extract >/dev/null)
+(cd "$EXTRACT_DIR/squashfs-root" && npx --yes asar extract resources/app.asar "$ASAR_DIR" >/dev/null 2>&1)
+INDEX_JS="$ASAR_DIR/dist/main/index.js"
+check_file "$INDEX_JS"
+rg -F 'get("options.themes")' "$INDEX_JS" >/dev/null
+rg -F 'set("options.themes", filePaths)' "$INDEX_JS" >/dev/null
+rg -F 'injectCSSAsFile(win.webContents, cssFile)' "$INDEX_JS" >/dev/null
+printf 'options.themes loader contract verified\n\n'
+
+printf '== ytm-player tests ==\n'
+check_file "$ROOT/pyproject.toml"
+(cd "$ROOT" && uv run --extra dev pytest -q \
+  tests/test_app/test_ipc.py \
+  tests/test_ui/test_actions_popup.py \
+  tests/test_app/test_theme_cache.py \
+  tests/test_ui/test_track_table.py \
+  tests/test_config/test_settings.py \
+  tests/test_services/test_audio_meter.py \
+  tests/test_services/test_radio_browser.py \
+  tests/test_services/test_station_favorites.py \
+  tests/test_ui/test_visualizer_modes.py)
+printf '\n'
+
+printf '== omusic Rust workspace ==\n'
+need cargo
+check_file "$OMUSIC_ROOT/Cargo.toml"
+(cd "$OMUSIC_ROOT" && cargo fmt --all -- --check && cargo check --workspace && cargo test --workspace)
+printf '\n'
+
+printf '== omusic Rust PTY render smoke ==\n'
+need script
+rm -f /tmp/music-verify-omusic-rust.typescript
+(cd "$OMUSIC_ROOT" && timeout 3s script -q -e -c 'stty rows 40 cols 120; env TERM=xterm-256color ./target/debug/omusic-tui' /tmp/music-verify-omusic-rust.typescript >/dev/null 2>&1) || true
+for token in "Omarchy Music" "Results" "Now Playing" "Visualizer" "Transport"; do
+  tr -cd '\11\12\15\40-\176' < /tmp/music-verify-omusic-rust.typescript | grep -F "$token" >/dev/null || {
+    printf 'Missing expected Rust TUI token in PTY capture: %s\n' "$token" >&2
+    exit 1
+  }
+done
+printf 'Rust TUI PTY render tokens verified\n\n'
+
+printf '== omusic tests ==\n'
+check_file "$OMUSIC_ROOT/pyproject.toml"
+(cd "$OMUSIC_ROOT" && uv run --extra dev pytest -q && uv run --extra dev ruff check src tests)
+"$HOME/.local/bin/omusic" --health
+"$HOME/.local/bin/omusic" --health | rg -F 'cliamp:' >/dev/null
+printf '\n'
+
+printf '== omusic source/UI contracts ==\n'
+check_rg '("?", "show_help", "Help")' "$OMUSIC_ROOT/src/omarchy_music/ui/app.py"
+check_rg '("h", "show_help", "Help")' "$OMUSIC_ROOT/src/omarchy_music/ui/app.py"
+check_rg 'HelpPalette' "$OMUSIC_ROOT/src/omarchy_music/ui/app.py"
+check_rg 'Omarchy Music Commands' "$OMUSIC_ROOT/src/omarchy_music/ui/help.py"
+check_rg 'Click a row, press its key, or press ? / Ctrl+H / Esc to close' "$OMUSIC_ROOT/src/omarchy_music/ui/help.py"
+check_rg 'Native Audio Tools' "$OMUSIC_ROOT/src/omarchy_music/ui/app.py"
+check_rg 'Native audio tools: status, EQ, device, queue, visualizer' "$OMUSIC_ROOT/src/omarchy_music/ui/app.py"
+check_rg 'visualizer_next_command' "$OMUSIC_ROOT/src/omarchy_music/adapters/cliamp.py"
+check_rg 'opens_terminal is False' "$OMUSIC_ROOT/tests/test_cliamp_adapter.py"
+check_rg 'Visualizer: {self.mode}' "$OMUSIC_ROOT/src/omarchy_music/ui/visualizer.py"
+check_rg 'test_help_palette_uses_rich_command_content_without_external_tools' "$OMUSIC_ROOT/tests/test_ui_contract.py"
+check_rg 'test_cliamp_controls_use_ipc_status_and_visualizer_hooks' "$OMUSIC_ROOT/tests/test_ui_contract.py"
+check_rg 'test_visualizer_new_ascii_art_modes_have_density_and_motion' "$OMUSIC_ROOT/tests/test_visualizer.py"
+printf 'help/native audio/visualizer source contracts verified\n\n'
+
+printf '== omusic PTY render smoke ==\n'
+need script
+rm -f /tmp/music-verify-omusic.typescript
+timeout 8s script -q -e -c "stty rows 60 cols 180; env TERM=xterm-256color $HOME/.local/bin/omusic" /tmp/music-verify-omusic.typescript >/dev/null 2>&1 || true
+for token in "Omarchy Music" "Press /" "Health" "Search" "Radio" "CLIAMP" "Visualizer:" "Queue" "Home:" "Native Audio Tools"; do
+  tr -cd '\11\12\15\40-\176' < /tmp/music-verify-omusic.typescript | grep -F "$token" >/dev/null || {
+    printf 'Missing expected TUI token in PTY capture: %s\n' "$token" >&2
+    exit 1
+  }
+done
+printf 'TUI PTY render tokens verified\n\n'
+
+printf 'Headless verification complete.\n'

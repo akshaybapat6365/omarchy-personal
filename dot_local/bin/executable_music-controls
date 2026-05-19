@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mpd_socket="${MPD_HOST:-/home/akshaybapat/.local/state/mpd/socket}"
+
+mpc_cmd() {
+  MPD_HOST="$mpd_socket" mpc "$@"
+}
+
+systemctl --user start mpd.service >/dev/null 2>&1 || true
+
+while true; do
+  clear
+  printf 'Music Platform\n'
+  printf '==============\n\n'
+  current="$(mpc_cmd current -f '%artist% - %title%' 2>/dev/null || true)"
+  if [[ -n "$current" ]]; then
+    printf 'Now\n%s\n\n' "$current"
+  else
+    printf 'Now\nNothing playing\n\n'
+  fi
+  mpc_cmd status 2>/dev/null || true
+  printf '\nKeys work anywhere in this window\n'
+  printf '  /      search + stream\n'
+  printf '  Space  play / pause\n'
+  printf '  n      next\n'
+  printf '  b      previous\n'
+  printf '  s      stop\n'
+  printf '  c      clear queue\n'
+  printf '  + -    volume\n'
+  printf '  Q      close platform\n'
+  printf '\nQueue\n'
+  mpc_cmd playlist -f '%position%. %artist% - %title%' 2>/dev/null | sed -n '1,10p' || true
+  sleep 1
+done

@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# music-spotlight — single fzf-driven YT-Music search/discovery overlay.
+# Invoked from a tiny floating ghostty window via Hyprland keybinds.
+#   search   — prompt for query, search YT Music (default)
+#   history  — your recent plays (server-side from your YT Music account)
+#   home     — personalized recommendations (YT Music Home shelves)
+#   library  — your library songs
+set -euo pipefail
+
+MODE="${1:-search}"
+HISTORY_LOG=~/.local/state/music-history.jsonl
+mkdir -p "$(dirname "$HISTORY_LOG")"
+
+# Make sure MPD is reachable
+export MPD_HOST="${MPD_HOST:-/home/akshaybapat/.local/state/mpd/socket}"
+
+die() { notify-send -t 2500 "Music Spotlight" "$*"; echo "$*" >&2; exit 1; }
+
+# Auth check (search/history/home/library all need it)
+if [[ ! -f ~/.config/ytm-player/auth.json ]]; then
+    die "Not authenticated. Run \`ytm setup\` once in a terminal."
+fi
+
+# 1. Get JSON results based on mode -----------------------------------------
+# All four modes go through ytm-helper (ytmusicapi direct). The `ytm` CLI's
+# auth file format diverges from raw ytmusicapi, so we bypass it entirely.
+case "$MODE" in
+    search)
+        QUERY=$(printf '' | fzf --prompt='🎵 Search YT Music: ' --print-query --no-info \
+                                 --height=100% --query='' \
+                                 --header="Type a song / artist / album, then Enter to search" \
+                                 --bind 'change:reload(true)' || true)
+        QUERY=$(echo "$QUERY" | head -1)
+        [[ -z "$QUERY" ]] && exit 0
+        JSON=$(ytm-helper search "$QUERY" 2>/dev/null) || die "Search failed."
+        ;;
+    history)
+        JSON=$(ytm-helper history 2>/dev/null) || die "History fetch failed."
+        ;;
+    home)
+        JSON=$(ytm-helper home 2>/dev/null) || die "Home fetch failed."
+        ;;
+    library)
+        JSON=$(ytm-helper library 2>/dev/null) || die "Library fetch failed."
+        ;;
+    *)
+        die "Unknown mode: $MODE"
+        ;;
+esac
+
+# 2. Format for fzf: "title — artist — duration\tvideoId\tthumbnailURL" -----
+# Defensive jq: handle multiple shapes (search results vs history vs flattened helpers).
+LINES=$(echo "$JSON" | jq -r '
+    if type == "array" then .
+    elif type == "object" and has("results") then .results
+    else [] end
+    | .[]
+    | select(.videoId != null and .videoId != "")
+    | (.title // "(untitled)") as $t
+    | (
+        if (.artists | type) == "array" and (.artists | length) > 0 then .artists[0].name
+        else (.artist // .subtitle // "?")
+        end
+      ) as $a
+    | (.duration // .duration_seconds // "?") as $d
+    | (
+        if (.thumbnails | type) == "array" and (.thumbnails | length) > 0 then .thumbnails[-1].url
+        else (.thumbnail // "")
+        end
+      ) as $thumb
+    | "\($t) — \($a) — \($d)\t\(.videoId)\t\($thumb)"
+' 2>/dev/null) || die "JSON parse error."
+
+[[ -z "$LINES" ]] && die "No results."
+
+# 3. fzf with kitty-icat thumbnail preview (works in ghostty too) ----------
+PREVIEW='
+    url={3}
+    label={1}
+    if [[ -n "$url" && "$url" != "null" ]]; then
+        kitten icat --clear --transfer-mode=memory --stdin=no --place=40x20@2x2 "$url" 2>/dev/null || true
+    fi
+    echo
+    echo "$label"
+'
+
+PICK=$(printf '%s\n' "$LINES" | fzf \
+    --prompt="🎵 ${MODE^}: " \
+    --delimiter=$'\t' --with-nth=1 \
+    --preview="$PREVIEW" \
+    --preview-window='right:50%:wrap' \
+    --height=100% --no-info \
+    --header="Enter to play · Esc to cancel" \
+    || true)
+
+[[ -z "$PICK" ]] && exit 0
+
+VIDEO_ID=$(echo "$PICK" | cut -f2)
+LABEL=$(   echo "$PICK" | cut -f1)
+[[ -z "$VIDEO_ID" ]] && die "No videoId in selection."
+
+# 4. Resolve stream URL (yt-dlp) and queue into MPD ------------------------
+URL=$(yt-dlp -g -f bestaudio --no-warnings \
+            "https://music.youtube.com/watch?v=${VIDEO_ID}" 2>/dev/null | head -1) \
+    || die "Failed to resolve stream URL."
+[[ -z "$URL" ]] && die "Empty stream URL."
+
+mpc clear  >/dev/null
+mpc add "$URL"
+mpc play   >/dev/null
+
+# 5. Append to local history (compounds with YT Music's server-side history)
+printf '{"ts":"%s","videoId":"%s","label":%s,"mode":"%s"}\n' \
+       "$(date -Is)" "$VIDEO_ID" "$(printf '%s' "$LABEL" | jq -Rs .)" "$MODE" \
+       >> "$HISTORY_LOG"
+
+notify-send -t 2000 "▶ Now playing" "$LABEL"

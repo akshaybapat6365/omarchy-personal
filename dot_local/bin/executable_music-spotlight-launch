@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Launch a floating Spotlight-style ghostty window running music-spotlight.
+# Hyprland window rules (in bindings.conf) handle float / center / size.
+exec ghostty --class=music-spotlight --title="Music Spotlight" \
+     -e /home/akshaybapat/.local/bin/music-spotlight "${1:-search}"

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Watch Omarchy's active wallpaper symlink. When it changes, re-extract a
+# palette with aether and apply the generated theme across all apps aether
+# supports (hyprland, waybar, kitty, ghostty, mako, walker, etc.).
+#
+# Covers: waypaper picker, `omarchy theme bg next`, `omarchy theme set`,
+# and any other writer that updates ~/.config/omarchy/current/background.
+set -u
+WATCH_DIR="$HOME/.config/omarchy/current"
+LAST_BG=""
+LOG=/tmp/aether-bg-watcher.log
+
+# Seed LAST_BG on startup so we don't re-theme on service start.
+if [ -L "$WATCH_DIR/background" ] || [ -f "$WATCH_DIR/background" ]; then
+    LAST_BG=$(realpath "$WATCH_DIR/background" 2>/dev/null || true)
+fi
+
+echo "$(date -Is) watcher started; baseline bg = $LAST_BG" >> "$LOG"
+
+while true; do
+    # Wait for any relevant change in the current/ dir (symlink swap shows
+    # up as create + move; aether-internal touch shows up as close_write).
+    inotifywait -qq -e create,move,delete,attrib,close_write "$WATCH_DIR" 2>/dev/null || sleep 1
+
+    # Debounce — let multi-step swaps settle.
+    sleep 0.7
+
+    BG=$(realpath "$WATCH_DIR/background" 2>/dev/null || true)
+    if [ -z "$BG" ] || [ ! -f "$BG" ]; then
+        continue
+    fi
+    if [ "$BG" = "$LAST_BG" ]; then
+        continue
+    fi
+
+    LAST_BG="$BG"
+    echo "$(date -Is) regenerating theme from $BG" >> "$LOG"
+    /usr/bin/aether --generate "$BG" >> "$LOG" 2>&1 || true
+done

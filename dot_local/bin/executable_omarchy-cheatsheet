@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Cheatsheet overlay — full-screen Alacritty terminal with transparent background.
+# Toggle on/off. Hyprland window rules match the title.
+
+set -euo pipefail
+
+TITLE="OmarchyCheatsheetOverlay"
+SCRIPT="$HOME/.local/share/omarchy/cheatsheet.sh"
+
+[[ -f "$SCRIPT" ]] || { notify-send "Cheatsheet" "Missing: $SCRIPT"; exit 1; }
+
+# Toggle: kill any existing instance
+if pgrep -af "alacritty.*$TITLE" >/dev/null 2>&1; then
+  pkill -f "alacritty.*$TITLE" 2>/dev/null || true
+  exit 0
+fi
+
+# Spawn full-screen, transparent Alacritty showing the cheatsheet.
+# window.opacity=0.30 → 70% wallpaper visible. Alacritty renders text fully opaque.
+setsid alacritty \
+  --class "$TITLE" \
+  --title "$TITLE" \
+  -o "window.opacity=0.30" \
+  -o "window.decorations=None" \
+  -o "window.padding.x=60" \
+  -o "window.padding.y=40" \
+  -o "font.size=14" \
+  -e bash -c "$SCRIPT; read -rsn1" \
+  >/dev/null 2>&1 &

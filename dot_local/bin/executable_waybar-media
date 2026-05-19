@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Waybar custom module: current MPRIS media player
+if ! command -v playerctl >/dev/null 2>&1; then
+  echo '{"text":""}'; exit 0
+fi
+STATUS=$(playerctl status 2>/dev/null || echo "")
+case "$STATUS" in
+  Playing) ICON="" ;;
+  Paused)  ICON="" ;;
+  *)       echo '{"text":""}'; exit 0 ;;
+esac
+TITLE=$(playerctl metadata title 2>/dev/null | cut -c1-40)
+ARTIST=$(playerctl metadata artist 2>/dev/null | cut -c1-25)
+TEXT="$ICON "
+[[ -n "$ARTIST" ]] && TEXT+="$ARTIST · "
+TEXT+="$TITLE"
+ESCAPED=${TEXT//\"/\\\"}
+printf '{"text":"%s","tooltip":"%s — %s\\n%s"}\n' "$ESCAPED" "${ARTIST//\"/\\\"}" "${TITLE//\"/\\\"}" "$STATUS"

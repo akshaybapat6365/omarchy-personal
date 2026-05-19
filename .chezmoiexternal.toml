@@ -1,0 +1,11 @@
+# External git refs auto-pulled by `chezmoi apply` / `chezmoi update`.
+# Refresh weekly (168h) unless --refresh-externals=always is passed.
+
+[".local/share/ai-config"]
+  type = "git-repo"
+  url  = "https://github.com/akshaybapat6365/ai-config.git"
+  refreshPeriod = "168h"
+  [".local/share/ai-config".clone]
+    args = ["--depth", "1"]
+  [".local/share/ai-config".pull]
+    args = ["--ff-only"]

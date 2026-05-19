@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Waybar custom module: today's Codex token spend (via ccusage)
+set -euo pipefail
+
+export PATH="$HOME/.local/share/mise/installs/node/25.9.0/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+CCUSAGE_BIN=$(command -v ccusage || true)
+TODAY=$(date +%Y-%m-%d)
+
+if [[ -z "$CCUSAGE_BIN" ]]; then
+  jq -cn --arg text " $0" --arg tooltip "Codex usage unavailable: ccusage not found in Waybar PATH" --arg class "hot" '{text: $text, tooltip: $tooltip, class: $class}'
+  exit 0
+fi
+
+DATA=$("$CCUSAGE_BIN" codex daily --json 2>/dev/null || printf '{}')
+
+TODAY_COST=$(printf '%s' "$DATA" | jq -r --arg today "$TODAY" '([.daily[]? | select((.date // .period) == $today) | (.costUSD // .totalCost // 0)] | add) // 0' 2>/dev/null)
+TOTAL_COST=$(printf '%s' "$DATA" | jq -r '(.totals.costUSD // .totals.totalCost // 0)' 2>/dev/null)
+TODAY_TOKENS=$(printf '%s' "$DATA" | jq -r --arg today "$TODAY" '([.daily[]? | select((.date // .period) == $today) | (.totalTokens // 0)] | add) // 0' 2>/dev/null)
+
+TODAY_COST=${TODAY_COST:-0}
+TOTAL_COST=${TOTAL_COST:-0}
+TODAY_TOKENS=${TODAY_TOKENS:-0}
+
+TODAY_FMT=$(printf '%.2f' "$TODAY_COST")
+TOTAL_FMT=$(printf '%.2f' "$TOTAL_COST")
+TOKENS_FMT=$(awk -v n="$TODAY_TOKENS" 'BEGIN { if (n >= 1000000000) printf "%.1fB", n/1000000000; else if (n >= 1000000) printf "%.1fM", n/1000000; else if (n >= 1000) printf "%.0fk", n/1000; else printf "%d", n }')
+
+CLASS="quiet"
+awk "BEGIN { exit !($TODAY_COST > 5)  }" && CLASS="warm"
+awk "BEGIN { exit !($TODAY_COST > 15) }" && CLASS="hot"
+
+jq -cn \
+  --arg text " \$${TODAY_FMT}" \
+  --arg tooltip "$(printf 'Codex today: $%s\nTokens: %s\nAll-time Codex: $%s\n\nClick to open AI spend dashboard' "$TODAY_FMT" "$TOKENS_FMT" "$TOTAL_FMT")" \
+  --arg class "$CLASS" \
+  '{text: $text, tooltip: $tooltip, class: $class}'

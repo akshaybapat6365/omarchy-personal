@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Install all mise-managed language runtimes declared in ~/.config/mise/config.toml.
+set -euo pipefail
+log() { printf '[chezmoi/mise] %s\n' "$*"; }
+
+command -v mise >/dev/null 2>&1 || { log "mise not on PATH; skipping (install via paru -S mise first)"; exit 0; }
+
+log "running mise install"
+mise install -y
+log "mise install complete:"
+mise ls

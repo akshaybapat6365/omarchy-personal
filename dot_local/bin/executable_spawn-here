@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# spawn-here -- run a command with a one-shot Hyprland windowrule pinning
+# the spawned process's first mapped window to the CURRENT workspace.
+# INSTRUMENTED: appends to /tmp/desktop-debug.log on every invocation.
+
+LOG=/tmp/desktop-debug.log
+ts() { date +'%H:%M:%S.%3N'; }
+log() { printf '[%s] spawn-here %s\n' "$(ts)" "$*" >> "$LOG"; }
+
+set -uo pipefail
+log "START argc=$# argv=$(printf '%q ' "$@")"
+if [[ $# -lt 1 ]]; then
+    log "ERROR no command"
+    echo "usage: spawn-here <command> [args...]" >&2
+    exit 1
+fi
+
+ws=$(hyprctl activeworkspace -j 2>>"$LOG" | jq -r .name 2>>"$LOG")
+log "captured.workspace.name='$ws'"
+
+if [[ -z "$ws" || "$ws" == "null" ]]; then
+    log "FALLBACK no ws captured -- exec direct"
+    exec "$@"
+fi
+
+cmd=$(printf '%q ' "$@")
+prefix="[workspace name:$ws silent]"
+log "DISPATCH prefix='$prefix' cmd='$cmd'"
+out=$(hyprctl dispatch exec "$prefix $cmd" 2>&1)
+rc=$?
+log "dispatch.rc=$rc dispatch.out='$out'"
+exit "$rc"

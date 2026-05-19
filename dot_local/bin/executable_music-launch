@@ -1,0 +1,413 @@
+#!/usr/bin/env bash
+# Canonical launcher for the dual-surface music stack.
+# Modes:
+#   auto      -> open the Omarchy Music terminal surface (default)
+#   electron  -> force the legacy youtube-music Electron app
+#   tui       -> force the Omarchy Music terminal surface
+#   ratatui   -> opt-in Rust/Ratatui path (auto-builds if needed)
+#
+# Flags:
+#   --no-window  exec the ratatui binary in the current terminal (no Hyprctl/Kitty)
+#
+# Env vars:
+#   OMUSIC_REPO=<path>  override repo location for the ratatui binary
+#
+# Run from any cwd — the launcher finds the repo automatically.
+set -euo pipefail
+
+STATE_DIR="$HOME/.local/state/music-ui"
+STATE_FILE="$STATE_DIR/last_surface"
+TUI_CLASS="org.omarchy.music-tui"
+TUI_TITLE="Music"
+CURRENT_URL_HELPER="$HOME/.local/bin/music-current-url"
+AUTH_REFRESH_HELPER="$HOME/.local/bin/ytm-auth-refresh"
+OMUSIC_BIN="$HOME/.local/bin/omusic"
+KITTY_BIN="$(command -v kitty 2>/dev/null || true)"
+ALACRITTY_BIN="$(command -v alacritty 2>/dev/null || true)"
+GHOSTTY_BIN="$(command -v ghostty 2>/dev/null || true)"
+
+# --no-window flag: exec binary directly in current terminal
+NO_WINDOW=0
+for _arg in "$@"; do
+    if [[ "$_arg" == "--no-window" ]]; then
+        NO_WINDOW=1
+        break
+    fi
+done
+
+usage() {
+    cat <<'EOF'
+Usage: music-launch [auto|electron|tui|ratatui] [--no-window]
+
+Modes:
+  auto       Open the Omarchy Music terminal surface (default)
+  electron   Force the legacy youtube-music Electron app
+  tui        Force the Omarchy Music terminal surface (Python)
+  ratatui    Opt-in Rust/Ratatui path; binary is auto-built if missing or stale
+
+Flags:
+  --no-window  Execute the ratatui binary directly in the current terminal
+               (no Hyprctl floating window, no Kitty). Useful for SSH/tmux
+               or when Hyprland is not running. Falls back automatically
+               when hyprctl is not on PATH.
+
+Environment:
+  OMUSIC_REPO=<path>  Override repo location (must contain Cargo.toml).
+                      Default probe order:
+                        1. $HOME/code/omarchy-music
+                        2. $HOME/omarchy-music
+                        3. ${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-music
+                        4. find $HOME -maxdepth 3 -name Cargo.toml -path '*omarchy-music*'
+
+Auto-build behavior (ratatui mode):
+  The launcher checks whether the release binary is missing or older than any
+  .rs file under $REPO/crates/. If so, it runs:
+    cargo build --release -p omusic-tui
+  Falls back to a debug build on release failure. Prints the failing command
+  and stderr tail on total failure.
+
+Tips:
+  Run from any cwd — the launcher finds the repo automatically.
+  Set OMUSIC_REPO=/path/to/omarchy-music to pin the repo location.
+EOF
+}
+
+remember_surface() {
+    mkdir -p "$STATE_DIR"
+    printf '%s\n' "$1" > "$STATE_FILE"
+}
+
+# ---------------------------------------------------------------------------
+# R33-B: Repo auto-discovery
+# ---------------------------------------------------------------------------
+discover_repo() {
+    # 1. Honor $OMUSIC_REPO if set and valid
+    if [[ -n "${OMUSIC_REPO:-}" && -f "${OMUSIC_REPO}/Cargo.toml" ]]; then
+        printf '%s' "$OMUSIC_REPO"
+        return 0
+    fi
+
+    # 2. Probe well-known locations
+    local _candidate
+    for _candidate in \
+        "$HOME/code/omarchy-music" \
+        "$HOME/omarchy-music" \
+        "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-music"
+    do
+        if [[ -f "$_candidate/Cargo.toml" ]]; then
+            printf '%s' "$_candidate"
+            return 0
+        fi
+    done
+
+    # 3. Last-resort find (bounded to maxdepth 3)
+    local _found
+    _found="$(find "$HOME" -maxdepth 3 -name "Cargo.toml" -path '*omarchy-music*' 2>/dev/null | head -1)"
+    if [[ -n "$_found" ]]; then
+        printf '%s' "$(dirname "$_found")"
+        return 0
+    fi
+
+    # Nothing found
+    printf 'omarchy-music repo not found. Set OMUSIC_REPO=/path/to/omarchy-music or clone the repo.\n' >&2
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# R33-A: Auto-build omusic-tui
+# ---------------------------------------------------------------------------
+# Sets (or updates) OMUSIC_TUI_BIN in the caller's scope via `return`.
+# Prints "Building …" message, tries release then debug.
+# Returns 0 and the binary path on stdout on success; returns 1 on failure.
+ensure_omusic_tui_bin() {
+    local repo="$1"
+    local release_bin="$repo/target/release/omusic-tui"
+    local debug_bin="$repo/target/debug/omusic-tui"
+
+    # Determine if a build is needed
+    local need_build=0
+
+    if [[ ! -x "$release_bin" && ! -x "$debug_bin" ]]; then
+        need_build=1
+    else
+        # Pick the newest existing binary to compare against sources
+        local existing_bin=""
+        if [[ -x "$release_bin" ]]; then
+            existing_bin="$release_bin"
+        else
+            existing_bin="$debug_bin"
+        fi
+
+        # Get binary mtime (epoch seconds)
+        local bin_mtime
+        bin_mtime="$(stat -c %Y "$existing_bin" 2>/dev/null || echo 0)"
+
+        # Get newest .rs file mtime under crates/
+        local newest_rs_mtime
+        newest_rs_mtime="$(find "$repo/crates" -name '*.rs' -printf '%T@\n' 2>/dev/null | sort -nr | head -1 | cut -d. -f1)"
+        newest_rs_mtime="${newest_rs_mtime:-0}"
+
+        if [[ "$newest_rs_mtime" -gt "$bin_mtime" ]]; then
+            need_build=1
+        fi
+    fi
+
+    if [[ "$need_build" -eq 0 ]]; then
+        # Return whichever exists, preferring release
+        if [[ -x "$release_bin" ]]; then
+            printf '%s' "$release_bin"
+        else
+            printf '%s' "$debug_bin"
+        fi
+        return 0
+    fi
+
+    # Build needed
+    printf 'Building omusic-tui (this can take ~30s on first run)…\n' >&2
+
+    # Try release build first
+    local build_stderr
+    build_stderr="$(mktemp)"
+    if (cd "$repo" && cargo build --release -p omusic-tui 2>"$build_stderr"); then
+        rm -f "$build_stderr"
+        printf '%s' "$release_bin"
+        return 0
+    fi
+
+    printf 'Release build failed; trying debug build…\n' >&2
+
+    # Try debug build
+    local debug_stderr
+    debug_stderr="$(mktemp)"
+    if (cd "$repo" && cargo build -p omusic-tui 2>"$debug_stderr"); then
+        rm -f "$build_stderr" "$debug_stderr"
+        printf '%s' "$debug_bin"
+        return 0
+    fi
+
+    # Both failed — print diagnostics and exit
+    printf '\nRelease build command: (cd %s && cargo build --release -p omusic-tui)\n' "$repo" >&2
+    printf 'Release build stderr (last 20 lines):\n' >&2
+    tail -20 "$build_stderr" >&2
+
+    printf '\nDebug build command: (cd %s && cargo build -p omusic-tui)\n' "$repo" >&2
+    printf 'Debug build stderr (last 20 lines):\n' >&2
+    tail -20 "$debug_stderr" >&2
+
+    rm -f "$build_stderr" "$debug_stderr"
+    return 1
+}
+
+focus_window_by_class() {
+    command -v hyprctl >/dev/null 2>&1 || return 1
+    local cls="$1"
+    local addr
+    addr="$(
+        hyprctl clients -j 2>/dev/null \
+            | jq -r --arg c "$cls" '.[] | select(.class == $c) | .address' \
+            | head -n 1
+    )"
+    if [[ -n "$addr" ]]; then
+        hyprctl dispatch focuswindow "address:$addr" >/dev/null 2>&1 || true
+        return 0
+    fi
+    return 1
+}
+
+focus_surface() {
+    local surface="$1"
+    case "$surface" in
+        electron)
+            focus_window_by_class "com.github.th_ch.youtube_music" \
+                || focus_window_by_class "YouTube Music" \
+                || focus_window_by_class "youtube-music"
+            ;;
+        tui)
+            "$AUTH_REFRESH_HELPER" >/dev/null 2>&1 || true
+            focus_window_by_class "$TUI_CLASS" || focus_window_by_class "org.omarchy.music"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+launch_electron() {
+    local youtube_music_bin
+    local cmd=()
+    local current_url=""
+    youtube_music_bin="$(command -v youtube-music 2>/dev/null || true)"
+    if [[ -z "$youtube_music_bin" ]]; then
+        return 1
+    fi
+    remember_surface electron
+    if [[ -x "$CURRENT_URL_HELPER" ]]; then
+        current_url="$("$CURRENT_URL_HELPER" 2>/dev/null || true)"
+    fi
+    cmd=("$youtube_music_bin")
+    if [[ -n "$current_url" ]]; then
+        cmd+=("$current_url")
+    fi
+    printf -v shell_cmd '%q ' "${cmd[@]}"
+    hyprctl dispatch exec "$shell_cmd" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+launch_tui() {
+    if [[ ! -x "$OMUSIC_BIN" ]]; then
+        return 1
+    fi
+    command -v hyprctl >/dev/null 2>&1 || return 1
+    "$AUTH_REFRESH_HELPER" >/dev/null 2>&1 || true
+    if [[ -n "$KITTY_BIN" ]]; then
+        local cmd=("$KITTY_BIN" --class "$TUI_CLASS" --title "$TUI_TITLE" env OMUSIC_VISUALIZER=cava OMUSIC_TERMINAL_IMAGES=1 "$OMUSIC_BIN")
+        local shell_cmd
+        printf -v shell_cmd '%q ' "${cmd[@]}"
+        if hyprctl dispatch exec "[float; size 1400 860; center] $shell_cmd" >/dev/null 2>&1; then
+            remember_surface tui
+            return 0
+        fi
+        return 1
+    fi
+    if [[ -n "$ALACRITTY_BIN" ]]; then
+        local cmd=("$ALACRITTY_BIN" --class "$TUI_CLASS" --title "$TUI_TITLE" -e env OMUSIC_VISUALIZER=cava "$OMUSIC_BIN")
+        local shell_cmd
+        printf -v shell_cmd '%q ' "${cmd[@]}"
+        if hyprctl dispatch exec "[float; size 1400 860; center] $shell_cmd" >/dev/null 2>&1; then
+            remember_surface tui
+            return 0
+        fi
+        return 1
+    fi
+    if [[ -n "$GHOSTTY_BIN" ]]; then
+        local cmd=("$GHOSTTY_BIN" --class="$TUI_CLASS" --title="$TUI_TITLE" -e env OMUSIC_VISUALIZER=cava "$OMUSIC_BIN")
+        local shell_cmd
+        printf -v shell_cmd '%q ' "${cmd[@]}"
+        if hyprctl dispatch exec "[float; size 1400 860; center] $shell_cmd" >/dev/null 2>&1; then
+            remember_surface tui
+            return 0
+        fi
+        return 1
+    fi
+    return 1
+}
+
+launch_ratatui() {
+    # Resolve repo location (R33-B)
+    local repo
+    repo="$(discover_repo)" || return 1
+
+    # Ensure binary is present and up to date (R33-A)
+    local bin_path
+    bin_path="$(ensure_omusic_tui_bin "$repo")" || return 1
+
+    # R36-LIVE-CAVA-DEFAULT: pass OMUSIC_TUI_LIVE_CAVA=1 to all launch paths
+    # unless the user has already opted out via OMUSIC_TUI_NO_LIVE_CAVA=1.
+    local _live_cava_env="OMUSIC_TUI_LIVE_CAVA=1"
+    if [[ "${OMUSIC_TUI_NO_LIVE_CAVA:-0}" == "1" ]]; then
+        _live_cava_env=""
+    fi
+
+    # --no-window mode: exec directly in current terminal
+    # Also falls back automatically when hyprctl is not available
+    if [[ "$NO_WINDOW" -eq 1 ]] || ! command -v hyprctl >/dev/null 2>&1; then
+        remember_surface ratatui
+        if [[ -n "$_live_cava_env" ]]; then
+            export OMUSIC_TUI_LIVE_CAVA=1
+        fi
+        exec "$bin_path"
+        # exec replaces this process; the lines below are never reached
+    fi
+
+    # Normal Hyprland floating-window launch
+    if [[ -n "$KITTY_BIN" ]]; then
+        local cmd=("$KITTY_BIN" --class "$TUI_CLASS" --title "$TUI_TITLE" env OMUSIC_VISUALIZER=cava OMUSIC_TERMINAL_IMAGES=1 ${_live_cava_env:+"$_live_cava_env"} "$bin_path")
+        local shell_cmd
+        printf -v shell_cmd '%q ' "${cmd[@]}"
+        if hyprctl dispatch exec "[float; size 1400 860; center] $shell_cmd" >/dev/null 2>&1; then
+            remember_surface ratatui
+            return 0
+        fi
+        return 1
+    fi
+    if [[ -n "$ALACRITTY_BIN" ]]; then
+        local cmd=("$ALACRITTY_BIN" --class "$TUI_CLASS" --title "$TUI_TITLE" -e env OMUSIC_VISUALIZER=cava ${_live_cava_env:+"$_live_cava_env"} "$bin_path")
+        local shell_cmd
+        printf -v shell_cmd '%q ' "${cmd[@]}"
+        if hyprctl dispatch exec "[float; size 1400 860; center] $shell_cmd" >/dev/null 2>&1; then
+            remember_surface ratatui
+            return 0
+        fi
+        return 1
+    fi
+    if [[ -n "$GHOSTTY_BIN" ]]; then
+        local cmd=("$GHOSTTY_BIN" --class="$TUI_CLASS" --title="$TUI_TITLE" -e env OMUSIC_VISUALIZER=cava ${_live_cava_env:+"$_live_cava_env"} "$bin_path")
+        local shell_cmd
+        printf -v shell_cmd '%q ' "${cmd[@]}"
+        if hyprctl dispatch exec "[float; size 1400 860; center] $shell_cmd" >/dev/null 2>&1; then
+            remember_surface ratatui
+            return 0
+        fi
+        return 1
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+mode="${1:-auto}"
+case "$mode" in
+    auto|electron|tui|ratatui)
+        ;;
+    -h|--help|help)
+        usage
+        exit 0
+        ;;
+    *)
+        printf 'Unknown mode: %s\n' "$mode" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
+# ratatui is handled immediately — it never falls back to auto/tui.
+if [[ "$mode" == "ratatui" ]]; then
+    if launch_ratatui; then
+        exit 0
+    fi
+    # launch_ratatui already printed the error message.
+    exit 1
+fi
+
+if [[ "$mode" == "auto" ]]; then
+    preferred="tui"
+else
+    preferred="$mode"
+fi
+
+if focus_surface "$preferred"; then
+    remember_surface "$preferred"
+    exit 0
+fi
+
+case "$preferred" in
+    electron)
+        if launch_electron; then
+            exit 0
+        fi
+        ;;
+    tui)
+        if launch_tui; then
+            exit 0
+        fi
+        ;;
+    *)
+        if launch_tui; then
+            exit 0
+        fi
+        ;;
+esac
+
+printf 'No supported music surface is available for mode `%s`.\n' "$preferred" >&2
+exit 1

@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$HOME/.local/opt/stremio-native"
+SERVER_JS="$APP_DIR/server.js"
+CERT_FILE="$HOME/.stremio-server/httpsCert.json"
+LOG_DIR="$HOME/.cache/stremio"
+LOG_FILE="$LOG_DIR/server.log"
+
+ensure_cert_and_print_domain() {
+  python3 - "$CERT_FILE" "$HOME" <<'PY'
+import base64, datetime as dt, json, os, sys, urllib.request
+
+cert_file, home = sys.argv[1], sys.argv[2]
+
+def parse_time(s):
+    return dt.datetime.fromisoformat(s.replace('Z', '+00:00'))
+
+def valid_existing():
+    try:
+        with open(cert_file) as f:
+            data = json.load(f)
+        not_after = parse_time(data['notAfter'])
+        if not_after > dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=7):
+            return data
+    except Exception:
+        return None
+    return None
+
+data = valid_existing()
+if data is None:
+    os.makedirs(os.path.dirname(cert_file), exist_ok=True)
+    ip_addr = '127.0.0.1'
+    body = json.dumps({'ipAddress': ip_addr, 'authKey': None}).encode()
+    req = urllib.request.Request(
+        'https://api.strem.io/api/certificateGet',
+        data=body,
+        headers={'Content-Type': 'application/json'},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode('utf-8'))
+    cert_resp = json.loads(payload['result']['certificate'])
+    common = cert_resp['commonName']
+    contents = cert_resp['contents']
+    data = {
+        'domain': ip_addr.replace('.', '-') + common.replace('*', ''),
+        'key': base64.b64decode(contents['PrivateKey']).decode('ascii'),
+        'cert': base64.b64decode(contents['Certificate']).decode('ascii'),
+        'notBefore': contents['NotBefore'],
+        'notAfter': contents['NotAfter'],
+    }
+    tmp = cert_file + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f)
+    os.replace(tmp, cert_file)
+print(data['domain'])
+PY
+}
+
+ensure_server() {
+  if ss -tln 2>/dev/null | grep -q ':11470'; then
+    return
+  fi
+  if command -v lsof &>/dev/null && lsof -i :11470 &>/dev/null; then
+    return
+  fi
+  if [[ ! -f "$SERVER_JS" ]]; then
+    echo "ERROR: server.js not found at $SERVER_JS" >&2
+    exit 1
+  fi
+  mkdir -p "$LOG_DIR"
+  if [[ -f "$LOG_FILE" && $(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0) -gt 10485760 ]]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+  fi
+  nohup node "$SERVER_JS" >> "$LOG_FILE" 2>&1 &
+  # Wait for server to bind
+  for _ in $(seq 1 30); do
+    if ss -tln 2>/dev/null | grep -q ':11470'; then
+      return
+    fi
+    sleep 0.2
+  done
+  echo "WARNING: server did not bind to 11470 within 6s" >&2
+}
+
+CERT_DOMAIN="$(ensure_cert_and_print_domain)"
+STREAMING_SERVER="https://$CERT_DOMAIN:12470"
+
+URL="$(python3 - "$STREAMING_SERVER" <<'PY'
+from urllib.parse import quote
+import sys
+server = sys.argv[1]
+print('https://web.stremio.com/?streamingServer=' + quote(server, safe=''))
+PY
+)"
+
+# Handle stremio:// deep links from desktop file / xdg-open
+extra_args=("$@")
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    stremio://*)
+      # Convert stremio:///detail/movie/tt0063350 -> web.stremio.com/#/detail/movie/tt0063350
+      path="${1#stremio://}"
+      path="${path#/}"  # strip leading slash if triple-slash
+      URL="${URL}#/${path}"
+      extra_args=()
+      ;;
+  esac
+fi
+
+ensure_server
+
+mkdir -p "$HOME/.cache/stremio/ssb-profile"
+
+exec chromium \
+  --app="$URL" \
+  --class=Stremio \
+  --name=Stremio \
+  --user-data-dir="$HOME/.cache/stremio/ssb-profile" \
+  --disable-background-timer-throttling \
+  --disable-features=TranslateUI \
+  --disable-infobars \
+  "${extra_args[@]}"

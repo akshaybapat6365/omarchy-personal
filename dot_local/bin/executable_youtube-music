@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Phase 11 — th-ch/youtube-music (renamed upstream to pear-devs/pear-desktop).
+# Installed via AppImage at ~/.local/share/youtube-music/youtube-music.AppImage
+# because no -bin AUR package exists under the old name in 2026 and we don't
+# want a sudo prompt for an Electron app that ships a portable AppImage.
+#
+# Auto-update later: re-download from
+#   https://github.com/pear-devs/pear-desktop/releases/latest
+# or swap to AUR `pear-desktop-bin` if you want pacman to manage it.
+set -euo pipefail
+
+APPIMAGE="$HOME/.local/share/youtube-music/youtube-music.AppImage"
+
+if [[ ! -x "$APPIMAGE" ]]; then
+    notify-send -u critical "YouTube Music" "AppImage missing at $APPIMAGE"
+    exit 1
+fi
+
+# Phase 12.A — audio fix for "totally silent on first launch".
+# Evidence (pear-desktop GH #4149/#4024/#3581 + electron #44607/#46843 +
+# Arch FS#71158): Electron's Wayland Ozone audio path can bind the
+# AudioContext to the wrong sink on first window map. Three flags fix it:
+#   --ozone-platform=wayland           — explicit, not "hint"
+#   WebRTCPipeWireCapturer feature     — talk PipeWire correctly
+#   --disable-features=WaylandFractionalScaleV1
+#                                       — 2025 bug: fractional scale
+#                                         suspends AudioContext
+#   --autoplay-policy=no-user-gesture-required
+#                                       — unblock AudioContext startup
+# If audio still silent after this, fallback diagnostic: change
+# --ozone-platform=wayland to =x11 to confirm Wayland-path bug.
+export ELECTRON_OZONE_PLATFORM_HINT=auto
+exec "$APPIMAGE" --appimage-extract-and-run \
+    --ozone-platform=wayland \
+    --enable-features=UseOzonePlatform,WaylandWindowDecorations,WebRTCPipeWireCapturer \
+    --disable-features=WaylandFractionalScaleV1 \
+    --autoplay-policy=no-user-gesture-required \
+    "$@"

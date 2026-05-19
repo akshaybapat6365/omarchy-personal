@@ -1,0 +1,76 @@
+#![enable(implicit_some)]
+#![enable(unwrap_newtypes)]
+#![enable(unwrap_variant_newtypes)]
+// Hinterlands — matches the user's active Omarchy theme (monochrome grays + soft accent).
+// Used as the fallback / first-paint theme. Per-song theming is handled by
+// rmpc-auto-theme writing themes/auto.ron from album art on every track change.
+(
+    default_album_art_path: None,
+    show_song_table_header: true,
+    draw_borders: true,
+    browser_column_widths: [22, 38, 40],
+
+    background_color:        "#222222",
+    text_color:              "#ffffff",
+    header_background_color: "#222222",
+    modal_background_color:  "#161616",
+
+    tab_bar: (
+        enabled: true,
+        active_style:   (fg: "#222222", bg: "#868686", modifiers: "Bold"),
+        inactive_style: (fg: "#525252", bg: "#161616"),
+    ),
+
+    highlighted_item_style:  (fg: "#ffffff", modifiers: "Bold"),
+    current_item_style:      (fg: "#222222", bg: "#868686", modifiers: "Bold"),
+    borders_style:           (fg: "#525252"),
+    highlight_border_style:  (fg: "#868686"),
+
+    symbols: (song: "♪", dir: "▾", marker: "▏", ellipsis: "…"),
+
+    progress_bar: (
+        symbols: ["━", "━", " "],
+        track_style:    (fg: "#525252"),
+        elapsed_style:  (fg: "#ffffff"),
+        thumb_style:    (fg: "#868686", bg: "#222222"),
+    ),
+
+    scrollbar: (
+        symbols: ["│","█","▲","▼"],
+        track_style: (fg: "#525252"),
+        ends_style:  (fg: "#525252"),
+        thumb_style: (fg: "#868686"),
+    ),
+
+    song_table_format: [
+        (
+            prop: (kind: Property(Track), default: (kind: Text("·"))),
+            width: "5%",
+            alignment: Right,
+        ),
+        (
+            prop: (kind: Property(Title), style: (modifiers: "Bold"),
+                   default: (kind: Text("(Untitled)"))),
+            width: "38%",
+            alignment: Left,
+        ),
+        (
+            prop: (kind: Property(Artist), style: (fg: "#a0a0a0"),
+                   default: (kind: Text("Unknown"))),
+            width: "30%",
+            alignment: Left,
+        ),
+        (
+            prop: (kind: Property(Album), style: (fg: "#868686"),
+                   default: (kind: Text(""))),
+            width: "22%",
+            alignment: Left,
+        ),
+        (
+            prop: (kind: Property(Duration), style: (fg: "#a0a0a0"),
+                   default: (kind: Text("--:--"))),
+            width: "5%",
+            alignment: Right,
+        ),
+    ],
+)

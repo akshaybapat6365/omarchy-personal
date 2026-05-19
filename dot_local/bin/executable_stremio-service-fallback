@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export NO_HTTPS_SERVER=1
+exec "$HOME/.local/opt/stremio-service/stremio-service" "$@"

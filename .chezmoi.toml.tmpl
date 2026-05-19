@@ -1,0 +1,39 @@
+{{- /* Interactive prompts on `chezmoi init`. Stored in ~/.config/chezmoi/chezmoi.toml. */ -}}
+{{- $hostname := promptStringOnce . "hostname" "Hostname" .chezmoi.hostname -}}
+{{- $primaryMonitor := promptStringOnce . "primary_monitor" "Primary monitor (e.g. eDP-1, DP-1)" "eDP-1" -}}
+{{- $dpi := promptStringOnce . "dpi" "Hyprland DPI scale (1, 1.25, 1.5, 2)" "1" -}}
+{{- $useOnePassword := promptBoolOnce . "use_1password" "Use 1Password CLI for age key derivation?" true -}}
+{{- $ghUser := promptStringOnce . "gh_user" "GitHub username" "akshaybapat6365" -}}
+{{- $gpuVendor := promptChoiceOnce . "gpu_vendor" "GPU vendor" (list "intel" "amd" "nvidia" "none") "intel" -}}
+{{- $machineClass := promptChoiceOnce . "machine_class" "Machine class" (list "laptop" "desktop" "server") "laptop" -}}
+
+[data]
+  hostname = {{ $hostname | quote }}
+  gh_user  = {{ $ghUser | quote }}
+  gpu      = {{ $gpuVendor | quote }}
+  machine  = {{ $machineClass | quote }}
+  dpi      = {{ $dpi | quote }}
+  monitor  = { primary = {{ $primaryMonitor | quote }} }
+  use_1password = {{ $useOnePassword }}
+
+[edit]
+  command = "zed"
+  args    = ["--wait"]
+
+[diff]
+  command = "zed"
+  args    = ["--wait", "--diff"]
+
+[git]
+  autoCommit = false
+  autoPush   = false
+
+{{- if $useOnePassword }}
+
+[age]
+  identity  = "{{ .chezmoi.homeDir }}/.config/chezmoi/age-identity.txt"
+  recipient = "REPLACE_AFTER_FIRST_AGE_KEYGEN"
+
+[onepassword]
+  cache = true
+{{- end }}

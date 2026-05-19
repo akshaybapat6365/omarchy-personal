@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# fzf picker over awesome-claude-code repo (skills, hooks, slash-commands, tools).
+# Opens the picked file in xdg-open (browser/markdown viewer).
+
+set -euo pipefail
+REPO="$HOME/code/awesome-claude-code"
+[[ -d "$REPO" ]] || { notify-send "Skill picker" "Repo missing: $REPO"; exit 1; }
+
+cd "$REPO"
+PICK=$(rg --files --hidden --glob '!.git' --glob '*.md' \
+  | fzf --reverse --height 100% \
+        --preview='cat {}' \
+        --preview-window=right:60% \
+        --header='AWESOME-CLAUDE-CODE SKILL PICKER  ·  Enter=open  ·  Esc=cancel') || exit 0
+xdg-open "$PICK" >/dev/null 2>&1 &

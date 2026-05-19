@@ -1,0 +1,8 @@
+# metapac group: editors
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+cursor-bin = "*"
+neovim = "*"
+tree-sitter-cli = "*"
+zed = "*"

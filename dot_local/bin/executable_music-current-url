@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+electron_config="$HOME/.config/YouTube Music/config.json"
+
+# Prefer the active TUI surface if it is running: its IPC gives a current
+# track/video ID directly. Fall back to the Electron app's persisted last URL.
+if command -v ytm >/dev/null 2>&1 && pgrep -u "$USER" -f '/ytm($| )|ytm-player' >/dev/null 2>&1; then
+    if json="$(ytm now 2>/dev/null)" && [[ -n "$json" ]]; then
+        video_id="$(
+            jq -r '.data.track.video_id // .track.video_id // .video_id // empty' <<<"$json" 2>/dev/null
+        )"
+        if [[ -n "$video_id" ]]; then
+            printf 'https://music.youtube.com/watch?v=%s\n' "$video_id"
+            exit 0
+        fi
+    fi
+fi
+
+if [[ -f "$electron_config" ]]; then
+    url="$(jq -r '.url // empty' "$electron_config" 2>/dev/null || true)"
+    if [[ -n "$url" ]]; then
+        printf '%s\n' "$url"
+        exit 0
+    fi
+fi
+
+exit 1

@@ -1,0 +1,22 @@
+# Fusuma handles fallback app-level gestures only.
+# Hyprland owns workspace, overview, launcher, and empty-workspace gestures.
+
+threshold:
+  swipe: 0.25
+  pinch: 0.5
+
+interval:
+  swipe: 0.35
+  pinch: 0.8
+
+pinch:
+  2:
+    in:
+      sendkey: 'LEFTCTRL+MINUS'
+    out:
+      sendkey: 'LEFTCTRL+EQUAL'
+
+plugin:
+  executors:
+    sendkey_executor:
+      device_name: 'AT Translated Set 2 keyboard'

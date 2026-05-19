@@ -1,0 +1,10 @@
+# metapac group: ai-clis
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+claude-code = "*"
+
+[arch-paru]
+awesome-omarchy-tui-bin = "*"
+codex-desktop = "*"
+espanso-wayland = "*"

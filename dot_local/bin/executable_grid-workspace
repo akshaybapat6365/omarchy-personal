@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# grid-workspace {north|south|east|west} — directional workspace move
+# on a logical 3x3 grid (workspaces 1-9). Wraps within rows/columns.
+# INSTRUMENTED: appends to /tmp/desktop-debug.log on every invocation.
+
+LOG=/tmp/desktop-debug.log
+ts() { date +'%H:%M:%S.%3N'; }
+log() { printf '[%s] grid-workspace %s\n' "$(ts)" "$*" >> "$LOG"; }
+
+set -uo pipefail
+dir="${1:-}"
+log "START dir='$dir' pid=$$"
+if [[ -z "$dir" ]]; then
+    log "ERROR no direction"
+    echo "usage: grid-workspace north|south|east|west" >&2
+    exit 1
+fi
+
+cur=$(hyprctl activeworkspace -j 2>>"$LOG" | jq -r .id 2>>"$LOG")
+log "active.workspace=$cur"
+
+case "$dir" in
+    east)  next=$(( cur % 3 == 0 ? cur - 2 : cur + 1 )) ;;
+    west)  next=$(( (cur - 1) % 3 == 0 ? cur + 2 : cur - 1 )) ;;
+    south) next=$(( cur > 6 ? cur - 6 : cur + 3 )) ;;
+    north) next=$(( cur < 4 ? cur + 6 : cur - 3 )) ;;
+    *)
+        log "ERROR unknown direction '$dir'"
+        echo "usage: grid-workspace {north|south|east|west}" >&2
+        exit 1 ;;
+esac
+log "computed.next=$next"
+
+out=$(hyprctl dispatch workspace "$next" 2>&1)
+rc=$?
+log "dispatch.rc=$rc dispatch.out='$out'"
+exit "$rc"

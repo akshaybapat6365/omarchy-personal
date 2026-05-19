@@ -1,0 +1,879 @@
+#!/usr/bin/env bash
+# omarchy-spend-prefetch — build state.json + pre-render ANSI frames
+# Called by systemd timer every 60s or manually.
+set -euo pipefail
+
+export PATH="$HOME/.local/share/mise/installs/node/25.9.0/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+
+STATE_DIR="$HOME/.local/share/omarchy-spend/state"
+ADAPTERS_DIR="$HOME/.local/share/omarchy-spend/adapters"
+mkdir -p "$STATE_DIR"
+
+python3 - "$STATE_DIR" "$ADAPTERS_DIR" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+STATE_DIR = Path(sys.argv[1])
+ADAPTERS_DIR = Path(sys.argv[2])
+STATE_JSON = STATE_DIR / "state.json"
+STATE_EXAMPLE = STATE_DIR / "state.example.json"
+
+MISE_NODE_BIN = Path.home() / ".local/share/mise/installs/node/25.9.0/bin"
+CCUSAGE_BIN = str(MISE_NODE_BIN / "ccusage")
+
+# Ensure ccusage is executable; fall back to PATH search
+if not os.path.isfile(CCUSAGE_BIN):
+    import shutil
+    CCUSAGE_BIN = shutil.which("ccusage") or "ccusage"
+
+MISE_PATH = str(MISE_NODE_BIN) + ":" + os.environ.get("PATH", "")
+SUBPROCESS_ENV = {**os.environ, "PATH": MISE_PATH}
+
+
+def run_cmd(cmd: list[str], timeout: int = 30) -> tuple[dict | list, str | None]:
+    """Run a command; return (parsed_json, error_str)."""
+    try:
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=SUBPROCESS_ENV,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return json.loads(r.stdout), None
+        return {}, (r.stderr.strip() or f"exit {r.returncode}")
+    except subprocess.TimeoutExpired:
+        return {}, "timeout"
+    except Exception as exc:
+        return {}, str(exc)
+
+
+def ccusage(provider: str, sub: str, *flags: str) -> tuple[dict | list, str | None]:
+    return run_cmd([CCUSAGE_BIN, provider, sub, "--json", *flags])
+
+
+# ---------------------------------------------------------------------------
+# Fetch all provider data concurrently
+# ---------------------------------------------------------------------------
+
+TODAY = date.today().isoformat()
+now_utc = datetime.now(timezone.utc)
+
+tasks = {
+    "claude_daily":     ([CCUSAGE_BIN, "claude",    "daily",   "--json"], 30),
+    "codex_daily":      ([CCUSAGE_BIN, "codex",     "daily",   "--json"], 30),
+    # opencode_daily only used as ccusage fallback when opencode.db is absent
+    "opencode_daily":   ([CCUSAGE_BIN, "opencode",  "daily",   "--json"], 30),
+    "claude_session":   ([CCUSAGE_BIN, "claude",    "session", "--json"], 30),
+    "codex_session":    ([CCUSAGE_BIN, "codex",     "session", "--json"], 30),
+    "opencode_session": ([CCUSAGE_BIN, "opencode",  "session", "--json"], 30),
+    "claude_monthly":   ([CCUSAGE_BIN, "claude",    "monthly", "--json"], 30),
+    "codex_monthly":    ([CCUSAGE_BIN, "codex",     "monthly", "--json"], 30),
+    "opencode_monthly": ([CCUSAGE_BIN, "opencode",  "monthly", "--json"], 30),
+}
+
+results: dict[str, tuple[dict | list, str | None]] = {}
+
+with ThreadPoolExecutor(max_workers=6) as pool:
+    futures = {pool.submit(run_cmd, cmd, timeout): key for key, (cmd, timeout) in tasks.items()}
+    for fut in as_completed(futures):
+        key = futures[fut]
+        try:
+            results[key] = fut.result()
+        except Exception as exc:
+            results[key] = ({}, str(exc))
+
+# ---------------------------------------------------------------------------
+# OpenCode DB adapter (primary) — falls back to ccusage if DB missing
+# ---------------------------------------------------------------------------
+
+oc_db_adapter = ADAPTERS_DIR / "opencode_db.py"
+oc_db_path = Path.home() / ".local/share/opencode/opencode.db"
+oc_db_data: dict = {}
+oc_db_warnings: list = []
+oc_db_used = False
+
+if oc_db_adapter.exists() and oc_db_path.exists():
+    oc_db_result, oc_db_err = run_cmd(["python3", str(oc_db_adapter)], timeout=15)
+    if isinstance(oc_db_result, dict) and "daily_rows" in oc_db_result:
+        oc_db_data = oc_db_result
+        oc_db_warnings = oc_db_result.get("warnings", [])
+        oc_db_used = True
+    else:
+        oc_db_warnings = [{"code": "ADAPTER_ERR", "msg": oc_db_err or "bad output"}]
+else:
+    if not oc_db_path.exists():
+        oc_db_warnings = [{"code": "NO_DB", "msg": "opencode.db not found — using ccusage fallback"}]
+
+# Provider adapters — run openrouter + new providers in parallel
+def run_provider_adapter(name: str, timeout: int = 30) -> tuple[dict, list]:
+    adapter = ADAPTERS_DIR / f"{name}.py"
+    if not adapter.exists():
+        return {}, [{"code": "NO_ADAPTER", "msg": f"{name}.py not found"}]
+    result, err = run_cmd(["python3", str(adapter)], timeout=timeout)
+    if isinstance(result, dict):
+        return result, result.get("warnings", [])
+    return {}, [{"code": "ADAPTER_ERR", "msg": err or "unknown"}]
+
+_provider_adapter_names = ["openrouter", "cursor", "copilot", "gemini"]
+_provider_adapter_results: dict[str, tuple[dict, list]] = {}
+
+with ThreadPoolExecutor(max_workers=4) as _padp_pool:
+    _padp_futures = {_padp_pool.submit(run_provider_adapter, n): n for n in _provider_adapter_names}
+    for _padp_fut in as_completed(_padp_futures):
+        _padp_name = _padp_futures[_padp_fut]
+        try:
+            _provider_adapter_results[_padp_name] = _padp_fut.result()
+        except Exception as _padp_exc:
+            _provider_adapter_results[_padp_name] = ({}, [{"code": "ADAPTER_EXC", "msg": str(_padp_exc)}])
+
+or_data,      or_warnings      = _provider_adapter_results.get("openrouter", ({}, []))
+cursor_data,  cursor_warnings  = _provider_adapter_results.get("cursor",     ({}, []))
+copilot_data, copilot_warnings = _provider_adapter_results.get("copilot",    ({}, []))
+gemini_data,  gemini_warnings  = _provider_adapter_results.get("gemini",     ({}, []))
+
+# ---------------------------------------------------------------------------
+# New local data-source adapters (parallel)
+# ---------------------------------------------------------------------------
+
+def run_local_adapter(name: str, timeout: int = 15) -> tuple[dict, str | None]:
+    adapter = ADAPTERS_DIR / name
+    if not adapter.exists():
+        return {}, f"{name} not found"
+    result, err = run_cmd(["python3", str(adapter)], timeout=timeout)
+    if isinstance(result, dict):
+        return result, err
+    return {}, err or "invalid JSON"
+
+local_adapter_names = {
+    "claude_stats": ("claude_stats.py", 10),
+    "gpu":          ("gpu.py",          12),
+    "hermes_db":    ("hermes_db.py",    10),
+    "cline_db":     ("cline_db.py",     10),
+    "codex_logs":   ("codex_logs.py",   10),
+}
+
+local_results: dict[str, tuple[dict, str | None]] = {}
+with ThreadPoolExecutor(max_workers=5) as _pool:
+    _futures = {
+        _pool.submit(run_local_adapter, fname, tout): key
+        for key, (fname, tout) in local_adapter_names.items()
+    }
+    for _fut in as_completed(_futures):
+        _key = _futures[_fut]
+        try:
+            local_results[_key] = _fut.result()
+        except Exception as _exc:
+            local_results[_key] = ({}, str(_exc))
+
+claude_stats_data, _ = local_results["claude_stats"]
+gpu_data, _          = local_results["gpu"]
+hermes_data, _       = local_results["hermes_db"]
+cline_data, _        = local_results["cline_db"]
+codex_logs_data, _   = local_results["codex_logs"]
+
+
+# ---------------------------------------------------------------------------
+# Load previous state.json for per-provider fallback
+# ---------------------------------------------------------------------------
+
+def load_prev_state() -> dict:
+    for p in (STATE_JSON, STATE_EXAMPLE):
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                pass
+    return {}
+
+prev = load_prev_state()
+prev_providers: dict = prev.get("providers", {})
+
+
+# ---------------------------------------------------------------------------
+# Parse ccusage JSON output
+# ---------------------------------------------------------------------------
+
+def extract_daily_rows(raw: dict | list) -> list[dict]:
+    """Return list of {date, cost, tokens} rows."""
+    if isinstance(raw, list):
+        rows = raw
+    elif isinstance(raw, dict):
+        rows = raw.get("daily", raw.get("rows", raw.get("data", [])))
+        if not isinstance(rows, list):
+            rows = []
+    else:
+        rows = []
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            out.append({
+                "date": str(r.get("date", "")),
+                "cost": float(r.get("cost", r.get("totalCost", 0))),
+                "tokens": int(r.get("tokens", r.get("totalTokens", 0))),
+            })
+    return out
+
+
+def extract_sessions(raw: dict | list) -> list[dict]:
+    if isinstance(raw, list):
+        rows = raw
+    elif isinstance(raw, dict):
+        rows = raw.get("sessions", raw.get("data", []))
+        if not isinstance(rows, list):
+            rows = []
+    else:
+        rows = []
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            cost = float(r.get("cost", r.get("totalCost", 0)))
+            tokens = int(r.get("tokens", r.get("totalTokens", 0)))
+            model = str(r.get("model", r.get("mostUsedModel", "")))
+            when = str(r.get("date", r.get("startTime", r.get("when", ""))))
+            ref = str(r.get("id", r.get("sessionId", r.get("ref", ""))))[:8]
+            out.append({"cost": cost, "provider": "", "model": model, "when": when, "tokens": tokens, "ref": ref})
+    return out
+
+
+def extract_monthly(raw: dict | list) -> dict:
+    """Return {month_cost, lifetime_cost}."""
+    if isinstance(raw, dict):
+        return {
+            "month": float(raw.get("month", raw.get("totalCost", raw.get("currentMonth", {}).get("totalCost", 0)))),
+            "lifetime": float(raw.get("lifetime", raw.get("lifetimeCost", raw.get("allTime", {}).get("totalCost", 0)))),
+        }
+    return {"month": 0.0, "lifetime": 0.0}
+
+
+def extract_models(daily_raw: dict | list) -> list[dict]:
+    """Try to extract per-model breakdown."""
+    if isinstance(daily_raw, dict):
+        models = daily_raw.get("models", daily_raw.get("byModel", []))
+        if isinstance(models, list):
+            out = []
+            for m in models:
+                if isinstance(m, dict):
+                    out.append({
+                        "name": str(m.get("model", m.get("name", "unknown"))),
+                        "today": float(m.get("cost", m.get("today", m.get("totalCost", 0)))),
+                        "tokens": int(m.get("tokens", m.get("totalTokens", 0))),
+                    })
+            return out
+    return []
+
+
+def today_cost(daily_rows: list[dict]) -> float:
+    for r in daily_rows:
+        if r["date"] == TODAY:
+            return r["cost"]
+    return 0.0
+
+
+def today_tokens(daily_rows: list[dict]) -> int:
+    for r in daily_rows:
+        if r["date"] == TODAY:
+            return r["tokens"]
+    return 0
+
+
+def week_cost(daily_rows: list[dict]) -> float:
+    total = 0.0
+    for r in daily_rows[-7:]:
+        total += r["cost"]
+    return total
+
+
+def build_provider(
+    key: str,
+    daily_raw: dict | list,
+    session_raw: dict | list,
+    monthly_raw: dict | list,
+    daily_err: str | None,
+) -> dict:
+    prev_p = prev_providers.get(key, {})
+
+    if daily_err and not daily_raw:
+        # Degrade: use previous cache entry for this provider
+        return prev_p if prev_p else {
+            "today": 0.0, "wow_pct": 0.0, "mom_pct": 0.0,
+            "month": 0.0, "lifetime": 0.0,
+            "tokens_today": 0, "tokens_month": 0,
+            "share_pct_today": 0.0,
+            "models": [], "daily_rows": [], "live_sessions": [],
+            "warnings": [{"code": "FETCH_ERR", "msg": daily_err}],
+        }
+
+    daily_rows = extract_daily_rows(daily_raw)
+    monthly = extract_monthly(monthly_raw)
+    models = extract_models(daily_raw)
+
+    td_cost = today_cost(daily_rows)
+    td_tok = today_tokens(daily_rows)
+    month_cost = monthly["month"] or sum(r["cost"] for r in daily_rows)
+    lifetime_cost = monthly["lifetime"] or prev_p.get("lifetime", month_cost)
+
+    # wow / mom as simple deltas (approximate)
+    prev_today = prev_p.get("today", 0.0) or td_cost
+    wow_pct = round((td_cost - prev_today) / max(prev_today, 0.01), 4) if prev_today else 0.0
+    prev_month = prev_p.get("month", 0.0) or month_cost
+    mom_pct = round((month_cost - prev_month) / max(prev_month, 0.01), 4) if prev_month else 0.0
+
+    return {
+        "today": round(td_cost, 4),
+        "wow_pct": wow_pct,
+        "mom_pct": mom_pct,
+        "month": round(month_cost, 4),
+        "lifetime": round(lifetime_cost, 4),
+        "tokens_today": td_tok,
+        "tokens_month": int(sum(r["tokens"] for r in daily_rows)),
+        "share_pct_today": 0.0,  # filled in after aggregation
+        "models": models,
+        "daily_rows": daily_rows,
+        "live_sessions": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Build provider entries
+# ---------------------------------------------------------------------------
+
+claude_p  = build_provider("claude",   *results["claude_daily"],   results["claude_session"][0],   results["claude_monthly"][0],  results["claude_daily"][1])
+codex_p   = build_provider("codex",    *results["codex_daily"],    results["codex_session"][0],    results["codex_monthly"][0],   results["codex_daily"][1])
+
+# Build opencode_p from DB adapter when available, else ccusage fallback
+if oc_db_used and oc_db_data:
+    oc_daily_rows = oc_db_data.get("daily_rows", [])
+    # Convert to the shape extract_daily_rows expects (it accepts list directly)
+    oc_monthly_raw = results["opencode_monthly"][0]
+    oc_monthly = extract_monthly(oc_monthly_raw)
+    td_cost = today_cost(oc_daily_rows)
+    td_tok = today_tokens(oc_daily_rows)
+    month_cost = oc_monthly["month"] or sum(r["cost"] for r in oc_daily_rows)
+    prev_p = prev_providers.get("opencode", {})
+    lifetime_cost = oc_monthly["lifetime"] or prev_p.get("lifetime", month_cost)
+    prev_today = prev_p.get("today", 0.0) or td_cost
+    wow_pct = round((td_cost - prev_today) / max(prev_today, 0.01), 4) if prev_today else 0.0
+    prev_month = prev_p.get("month", 0.0) or month_cost
+    mom_pct = round((month_cost - prev_month) / max(prev_month, 0.01), 4) if prev_month else 0.0
+    oc_tok_breakdown = oc_db_data.get("tokens", {})
+    opencode_p = {
+        "today": round(td_cost, 4),
+        "wow_pct": wow_pct,
+        "mom_pct": mom_pct,
+        "month": round(month_cost, 4),
+        "lifetime": round(lifetime_cost, 4),
+        "tokens_today": td_tok,
+        "tokens_month": int(sum(r["tokens"] for r in oc_daily_rows)),
+        "share_pct_today": 0.0,
+        "tokens": {
+            "input":      oc_tok_breakdown.get("input", 0),
+            "output":     oc_tok_breakdown.get("output", 0),
+            "reasoning":  oc_tok_breakdown.get("reasoning", 0),
+            "cache_read": oc_tok_breakdown.get("cache_read", 0),
+            "cache_write":oc_tok_breakdown.get("cache_write", 0),
+        },
+        "cache_hit_rate_pct": oc_db_data.get("cache_hit_rate_pct", 0.0),
+        "models": [],
+        "daily_rows": oc_daily_rows,
+        "live_sessions": [],
+        "warnings": oc_db_warnings if oc_db_warnings else [],
+    }
+else:
+    # Fallback: ccusage opencode daily
+    opencode_p = build_provider("opencode", *results.get("opencode_daily", ({}, "no_data")), results["opencode_session"][0], results["opencode_monthly"][0], results.get("opencode_daily", ({}, "no_data"))[1])
+    if oc_db_warnings:
+        opencode_p.setdefault("warnings", []).extend(oc_db_warnings)
+
+# OpenRouter
+if or_data and "today" in or_data:
+    or_today = float(or_data.get("today", 0))
+    or_month = float(or_data.get("month", or_today))
+    or_lifetime = float(or_data.get("lifetime", or_month))
+    or_daily_rows = extract_daily_rows(or_data.get("daily_rows", or_data.get("rows", [])))
+    or_models = or_data.get("models", [])
+    openrouter_p = {
+        "today": or_today,
+        "wow_pct": 0.0,
+        "mom_pct": 0.0,
+        "month": or_month,
+        "lifetime": or_lifetime,
+        "tokens_today": int(or_data.get("tokens_today", 0)),
+        "tokens_month": int(or_data.get("tokens_month", 0)),
+        "share_pct_today": 0.0,
+        "models": or_models,
+        "daily_rows": or_daily_rows,
+        "live_sessions": [],
+    }
+else:
+    openrouter_p = prev_providers.get("openrouter", {
+        "today": 0.0, "wow_pct": 0.0, "mom_pct": 0.0,
+        "month": 0.0, "lifetime": 0.0,
+        "tokens_today": 0, "tokens_month": 0,
+        "share_pct_today": 0.0, "models": [], "daily_rows": [], "live_sessions": [],
+    })
+    if or_warnings:
+        openrouter_p["warnings"] = or_warnings
+
+# Cursor
+_cursor_inner = cursor_data.get("cursor", {})
+if _cursor_inner and _cursor_inner.get("available") is not False:
+    cursor_p = {
+        "today":          float(_cursor_inner.get("today", 0)),
+        "wow_pct":        0.0,
+        "mom_pct":        0.0,
+        "month":          float(_cursor_inner.get("month", 0)),
+        "lifetime":       float(_cursor_inner.get("lifetime", 0)),
+        "tokens_today":   0,
+        "tokens_month":   0,
+        "share_pct_today": 0.0,
+        "models":         [],
+        "daily_rows":     [],
+        "live_sessions":  [],
+        "warnings":       cursor_warnings,
+    }
+else:
+    cursor_p = prev_providers.get("cursor", {
+        "today": 0.0, "wow_pct": 0.0, "mom_pct": 0.0,
+        "month": 0.0, "lifetime": 0.0,
+        "tokens_today": 0, "tokens_month": 0,
+        "share_pct_today": 0.0, "models": [], "daily_rows": [], "live_sessions": [],
+        "warnings": cursor_warnings,
+    })
+
+# Copilot
+_copilot_inner = copilot_data.get("copilot", {})
+if _copilot_inner and _copilot_inner.get("available") not in (False, None):
+    copilot_p = {
+        "today":                  float(_copilot_inner.get("today_cost_estimated", 0)),
+        "wow_pct":                0.0,
+        "mom_pct":                0.0,
+        "month":                  float(_copilot_inner.get("today_cost_estimated", 0)),
+        "lifetime":               0.0,
+        "tokens_today":           0,
+        "tokens_month":           0,
+        "share_pct_today":        0.0,
+        "models":                 [],
+        "daily_rows":             [],
+        "live_sessions":          [],
+        "today_acceptance_rate":  float(_copilot_inner.get("today_acceptance_rate", 0)),
+        "today_suggestions":      int(_copilot_inner.get("today_suggestions", 0)),
+        "today_accepted":         int(_copilot_inner.get("today_accepted", 0)),
+        "warnings":               copilot_warnings,
+    }
+else:
+    copilot_p = prev_providers.get("copilot", {
+        "today": 0.0, "wow_pct": 0.0, "mom_pct": 0.0,
+        "month": 0.0, "lifetime": 0.0,
+        "tokens_today": 0, "tokens_month": 0,
+        "share_pct_today": 0.0, "models": [], "daily_rows": [], "live_sessions": [],
+        "warnings": copilot_warnings,
+    })
+
+# Gemini
+_gemini_inner = gemini_data.get("gemini", {})
+if _gemini_inner and _gemini_inner.get("available"):
+    gemini_p = {
+        "today":          float(_gemini_inner.get("today", 0)),
+        "wow_pct":        0.0,
+        "mom_pct":        0.0,
+        "month":          float(_gemini_inner.get("month", 0)),
+        "lifetime":       0.0,
+        "tokens_today":   0,
+        "tokens_month":   0,
+        "share_pct_today": 0.0,
+        "models":         [],
+        "daily_rows":     [],
+        "live_sessions":  [],
+        "warnings":       gemini_warnings,
+    }
+else:
+    gemini_p = prev_providers.get("gemini", {
+        "today": 0.0, "wow_pct": 0.0, "mom_pct": 0.0,
+        "month": 0.0, "lifetime": 0.0,
+        "tokens_today": 0, "tokens_month": 0,
+        "share_pct_today": 0.0, "models": [], "daily_rows": [], "live_sessions": [],
+        "warnings": gemini_warnings,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Aggregates
+# ---------------------------------------------------------------------------
+
+_all_providers = (claude_p, codex_p, opencode_p, openrouter_p, cursor_p, copilot_p, gemini_p)
+
+today_total = sum(p["today"] for p in _all_providers)
+
+# Share pct
+for p in _all_providers:
+    p["share_pct_today"] = round(p["today"] / max(today_total, 0.01), 6)
+
+def week_total_for(p: dict) -> float:
+    return sum(r["cost"] for r in p.get("daily_rows", [])[-7:])
+
+week_total = sum(week_total_for(p) for p in _all_providers)
+
+mtd_total = sum(p["month"] for p in _all_providers)
+lifetime_total = sum(p["lifetime"] for p in _all_providers)
+
+tokens_today = sum(p["tokens_today"] for p in _all_providers)
+tokens_month = sum(p["tokens_month"] for p in _all_providers)
+
+# Burn rate: today cost / hours elapsed since midnight UTC
+hour_of_day = now_utc.hour + now_utc.minute / 60.0
+burn_rate = round(today_total / max(hour_of_day, 0.5), 4)
+
+BUDGET_MONTHLY = 6000.0
+try:
+    cfg_path = Path.home() / ".config/omarchy-spend/config.toml"
+    if cfg_path.exists():
+        for line in cfg_path.read_text().splitlines():
+            if "monthly" in line and "=" in line:
+                parts = line.split("=", 1)
+                if "budget" not in parts[0].lower():
+                    continue
+                BUDGET_MONTHLY = float(parts[1].strip())
+                break
+except Exception:
+    pass
+
+days_in_month = 30
+day_of_month = now_utc.day
+forecast_eom = round((mtd_total / max(day_of_month - 1, 1)) * days_in_month, 2) if day_of_month > 1 else round(burn_rate * 24 * days_in_month, 2)
+budget_used_pct = round(mtd_total / max(BUDGET_MONTHLY, 1.0), 6)
+
+# Health grade
+if budget_used_pct < 0.50:
+    health_grade = "A"
+elif budget_used_pct < 0.65:
+    health_grade = "B+"
+elif budget_used_pct < 0.80:
+    health_grade = "B"
+elif budget_used_pct < 0.95:
+    health_grade = "C"
+else:
+    health_grade = "D"
+
+if burn_rate > 50:
+    burn_class = "HIGH"
+elif burn_rate > 20:
+    burn_class = "MEDIUM"
+else:
+    burn_class = "LOW"
+
+# ---------------------------------------------------------------------------
+# Insights (heuristic)
+# ---------------------------------------------------------------------------
+
+insights: list[dict] = []
+
+# model_introduced: first time a model appears (check against prev state)
+all_current_models: set[str] = set()
+for p in (claude_p, codex_p, opencode_p, openrouter_p):
+    for m in p.get("models", []):
+        all_current_models.add(m["name"])
+
+prev_all_models: set[str] = set()
+for pname, pp in prev_providers.items():
+    for m in pp.get("models", []):
+        prev_all_models.add(m["name"])
+
+new_models = all_current_models - prev_all_models
+for nm in sorted(new_models):
+    insights.append({
+        "kind": "model_introduced",
+        "severity": "info",
+        "text": f"New model detected: {nm}",
+    })
+
+# session_length: % sessions > 1h (parse session duration if available)
+long_sessions = 0
+total_sessions = 0
+for raw_key in ("claude_session", "codex_session", "opencode_session"):
+    raw, _ = results[raw_key]
+    sessions = raw.get("sessions", raw.get("data", [])) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+    for s in sessions:
+        if not isinstance(s, dict):
+            continue
+        total_sessions += 1
+        duration = s.get("duration", s.get("durationSeconds", 0))
+        if isinstance(duration, (int, float)) and duration > 3600:
+            long_sessions += 1
+
+if total_sessions > 0:
+    long_pct = int(100 * long_sessions / total_sessions)
+    if long_pct >= 30:
+        insights.append({
+            "kind": "session_length",
+            "severity": "warn",
+            "text": f"{long_pct}% of sessions exceed 1h — /compact every 30min could reduce token spend",
+        })
+
+# efficient_day: best $/token day across all providers
+best_day = None
+best_rate = float("inf")
+for p in (claude_p, codex_p, opencode_p):
+    for r in p.get("daily_rows", []):
+        if r["tokens"] > 0 and r["cost"] > 0:
+            rate = r["cost"] / r["tokens"] * 1_000_000  # micro-dollars per token
+            if rate < best_rate:
+                best_rate = rate
+                best_day = r["date"]
+
+if best_day:
+    insights.append({
+        "kind": "efficient_day",
+        "severity": "info",
+        "text": f"Most efficient day: {best_day}  {best_rate:.2f} micro-$/tok",
+    })
+
+# auth_issue: any provider with warnings/errors
+auth_issues = []
+for pname, p in [
+    ("claude", claude_p), ("codex", codex_p), ("opencode", opencode_p),
+    ("openrouter", openrouter_p), ("cursor", cursor_p), ("copilot", copilot_p), ("gemini", gemini_p),
+]:
+    if p.get("warnings"):
+        auth_issues.append(pname)
+
+if auth_issues:
+    insights.append({
+        "kind": "auth_issue",
+        "severity": "danger",
+        "text": f"Provider fetch errors: {', '.join(auth_issues)} — check API keys / auth",
+    })
+
+# mcp_cost: skip if no data (not available from ccusage)
+
+
+# ---------------------------------------------------------------------------
+# Top sessions (cross-provider)
+# ---------------------------------------------------------------------------
+
+all_sessions: list[dict] = []
+for pname, raw_key in [("claude", "claude_session"), ("codex", "codex_session"), ("opencode", "opencode_session")]:
+    raw, _ = results[raw_key]
+    sessions_raw = raw.get("sessions", raw.get("data", [])) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+    for s in sessions_raw:
+        if isinstance(s, dict):
+            cost = float(s.get("cost", s.get("totalCost", 0)))
+            tokens = int(s.get("tokens", s.get("totalTokens", 0)))
+            model = str(s.get("model", s.get("mostUsedModel", "")))
+            when = str(s.get("date", s.get("startTime", "")))[:10]
+            ref = str(s.get("id", s.get("sessionId", "")))[:8]
+            all_sessions.append({"cost": cost, "provider": pname, "model": model, "when": when, "tokens": tokens, "ref": ref})
+
+all_sessions.sort(key=lambda x: x["cost"], reverse=True)
+top_sessions = all_sessions[:5]
+
+
+# ---------------------------------------------------------------------------
+# Build final state
+# ---------------------------------------------------------------------------
+
+# Merge claude tool_stats into claude provider entry
+if claude_stats_data:
+    claude_p["tool_stats"] = {
+        "tool_calls_today": claude_stats_data.get("tool_calls_today", {}),
+        "total_today":      claude_stats_data.get("total_today", 0),
+        "top_3_tools":      claude_stats_data.get("top_3_tools", []),
+        "sessions_today":   claude_stats_data.get("sessions_today", 0),
+    }
+
+# Merge codex log counts into codex provider entry
+if codex_logs_data.get("codex"):
+    _cl = codex_logs_data["codex"]
+    codex_p["log_stats"] = {
+        "messages_today":   _cl.get("messages_today", 0),
+        "errors_today":     _cl.get("errors_today", 0),
+        "warnings_today":   _cl.get("warnings_today", 0),
+        "messages_lifetime":_cl.get("messages_lifetime", 0),
+        "errors_lifetime":  _cl.get("errors_lifetime", 0),
+        "schema_available": _cl.get("schema_available", False),
+    }
+
+state = {
+    "schema_version": 1,
+    "generated_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "cache_age_seconds": 0,
+    "prefetch_ok": True,
+    "providers": {
+        "claude":      claude_p,
+        "codex":       codex_p,
+        "opencode":    opencode_p,
+        "openrouter":  openrouter_p,
+        "cursor":      cursor_p,
+        "copilot":     copilot_p,
+        "gemini":      gemini_p,
+        "hermes":      hermes_data.get("hermes", {}),
+        "cline":       cline_data.get("cline", {}),
+    },
+    "system_signals": {
+        "gpu": gpu_data,
+    },
+    "aggregates": {
+        "today_total":              round(today_total, 4),
+        "week_total":               round(week_total, 4),
+        "mtd_total":                round(mtd_total, 4),
+        "lifetime_total":           round(lifetime_total, 4),
+        "tokens_today":             tokens_today,
+        "tokens_month":             tokens_month,
+        "session_count_today":      total_sessions,
+        "burn_rate_per_hr":         burn_rate,
+        "burn_rate_class":          burn_class,
+        "burn_rate_delta_pct_vs_avg": 0.0,
+        "forecast_eom":             forecast_eom,
+        "forecast_band":            round(forecast_eom * 0.15, 2),
+        "forecast_confidence":      0.75,
+        "budget_monthly":           BUDGET_MONTHLY,
+        "budget_used_pct":          budget_used_pct,
+        "health_grade":             health_grade,
+        "health_delta_wk":          "stable",
+        "anomaly_count":            len([i for i in insights if i["severity"] == "danger"]),
+    },
+    "insights": insights,
+    "top_sessions_week": top_sessions,
+    "heatmap_30d": [],
+    "warnings": or_warnings,
+}
+
+# ---------------------------------------------------------------------------
+# Intelligence layer — compute grade, forecast, anomaly, p90
+# ---------------------------------------------------------------------------
+
+try:
+    import sys as _sys
+    _intel_dir = str(Path.home() / ".local" / "share" / "omarchy-spend")
+    if _intel_dir not in _sys.path:
+        _sys.path.insert(0, _intel_dir)
+    from intelligence import compute_all as _intel_compute_all
+    _intel = _intel_compute_all(state)
+    # Merge aggregates_patch into state aggregates
+    state["aggregates"].update(_intel["aggregates_patch"])
+    # Append insights_patch (deduplicate by text)
+    existing_texts = {i.get("text", "") for i in state["insights"]}
+    for ins in _intel["insights_patch"]:
+        if ins.get("text", "") not in existing_texts:
+            state["insights"].append(ins)
+            existing_texts.add(ins.get("text", ""))
+    # Store full intelligence output
+    state["intelligence"] = _intel["intelligence"]
+    print(
+        f"intelligence: grade={_intel['aggregates_patch']['health_grade']} "
+        f"forecast_eom=${_intel['aggregates_patch']['forecast_eom']:.2f} "
+        f"anomalies={_intel['aggregates_patch']['anomaly_count']}",
+        flush=True,
+    )
+except Exception as _intel_exc:
+    print(f"intelligence layer skipped: {_intel_exc}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Atomic write: only overwrite if at least one provider returned fresh data
+# ---------------------------------------------------------------------------
+
+any_fresh = not (
+    results["claude_daily"][1] and
+    results["codex_daily"][1] and
+    results["opencode_daily"][1] and
+    bool(or_warnings)
+)
+
+if any_fresh:
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=str(STATE_DIR), suffix=".tmp", delete=False
+    ) as tf:
+        json.dump(state, tf, indent=2)
+        tmp_path = tf.name
+    os.chmod(tmp_path, 0o644)
+    os.replace(tmp_path, str(STATE_JSON))
+    print(f"state.json written: today=${today_total:.2f} health={health_grade}", flush=True)
+else:
+    print("All providers failed — state.json NOT overwritten (preserving cache)", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Pre-render ANSI frames per vision (fallback static frame)
+# ---------------------------------------------------------------------------
+
+def render_static_frame(vision: str, state: dict) -> str:
+    agg = state["aggregates"]
+    td = agg["today_total"]
+    mtd = agg["mtd_total"]
+    grade = agg["health_grade"]
+    burn = agg["burn_rate_per_hr"]
+    budget = agg["budget_monthly"]
+    used_pct = agg["budget_used_pct"] * 100
+
+    providers = state["providers"]
+    top_providers = sorted(providers.items(), key=lambda kv: kv[1].get("today", 0), reverse=True)
+
+    W = 80
+    bar_filled = int(used_pct / 100 * (W - 4))
+    bar_str = "█" * bar_filled + "░" * ((W - 4) - bar_filled)
+
+    lines = []
+    lines.append(f"\033[1;36m╔{'═' * (W - 2)}╗\033[0m")
+    lines.append(f"\033[1;36m║\033[0m  \033[1;37mAI SPEND  [{vision.upper():^10}]  \033[0m  today \033[1;32m${td:>8.2f}\033[0m  mtd \033[1;33m${mtd:>9.2f}\033[0m  grade \033[1;35m{grade}\033[0m  \033[1;36m║\033[0m")
+    lines.append(f"\033[1;36m║\033[0m  burn \033[0;33m${burn:>6.2f}/hr\033[0m  budget \033[0;90m${budget:.0f}\033[0m  used \033[{'1;31m' if used_pct > 80 else '0;33m'}{used_pct:.1f}%\033[0m{'':>28}  \033[1;36m║\033[0m")
+    lines.append(f"\033[1;36m║\033[0m  [\033[{'1;31m' if used_pct > 80 else '0;32m'}{bar_str[:W-6]}\033[0m]  \033[1;36m║\033[0m")
+    lines.append(f"\033[1;36m╠{'═' * (W - 2)}╣\033[0m")
+    for pname, pd in top_providers[:4]:
+        pt = pd.get("today", 0)
+        pm = pd.get("month", 0)
+        share = pd.get("share_pct_today", 0) * 100
+        lines.append(f"\033[1;36m║\033[0m  \033[1;37m{pname:<12}\033[0m  today \033[1;32m${pt:>8.2f}\033[0m  month \033[0;33m${pm:>9.2f}\033[0m  share \033[0;36m{share:>5.1f}%\033[0m       \033[1;36m║\033[0m")
+    lines.append(f"\033[1;36m╚{'═' * (W - 2)}╝\033[0m")
+    return "\n".join(lines) + "\n"
+
+VISIONS = ["mission", "demoscene", "time"]
+BIN_DIR = Path.home() / ".local/share/omarchy-spend/bin"
+
+for vision in VISIONS:
+    frame_path = STATE_DIR / f"frame-{vision}.ansi"
+    vision_bin = BIN_DIR / f"omarchy-spend-{vision}"
+
+    rendered = False
+    if vision_bin.exists() and os.access(str(vision_bin), os.X_OK):
+        try:
+            r = subprocess.run(
+                [str(vision_bin), "--render-frame"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=SUBPROCESS_ENV,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                with tempfile.NamedTemporaryFile(
+                    mode="w", dir=str(STATE_DIR), suffix=".tmp", delete=False
+                ) as tf:
+                    tf.write(r.stdout)
+                    tmp = tf.name
+                os.replace(tmp, str(frame_path))
+                rendered = True
+        except Exception:
+            pass
+
+    if not rendered:
+        frame_content = render_static_frame(vision, state)
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=str(STATE_DIR), suffix=".tmp", delete=False
+        ) as tf:
+            tf.write(frame_content)
+            tmp = tf.name
+        os.replace(tmp, str(frame_path))
+        print(f"frame-{vision}.ansi written (static fallback)", flush=True)
+
+print("prefetch complete", flush=True)
+PY

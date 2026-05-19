@@ -1,0 +1,21 @@
+# Changes require a restart to take effect.
+
+# Ensure Omarchy bins are in the path
+export OMARCHY_PATH=$HOME/.local/share/omarchy
+export PATH=$OMARCHY_PATH/bin:$PATH:$HOME/.local/bin
+
+# Set default terminal and editor
+source ~/.config/uwsm/default
+
+# Activate mise if present on the system
+omarchy-cmd-present mise && eval "$(mise activate bash --shims)"
+
+# Task 10 GPU/Wayland iGPU-primary session env.
+# UWSM reads this before Hyprland starts; logout/login is required.
+# hyprctl reload cannot reinitialize Hyprland's renderer or existing app env.
+# Rollback: remove this block or restore the Task 10 backup, then logout/login.
+export AQ_DRM_DEVICES=/dev/dri/by-path/pci-0000:00:02.0-card
+export __GLX_VENDOR_LIBRARY_NAME=mesa
+export LIBVA_DRIVER_NAME=iHD
+export VDPAU_DRIVER=va_gl
+# End Task 10 GPU/Wayland env.

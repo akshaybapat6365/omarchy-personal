@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+APP_DIR="$HOME/.local/opt/stremio-classic/opt/stremio"
+LIB_DIR="$HOME/.local/opt/stremio-classic/lib"
+export LD_LIBRARY_PATH="$LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export NO_HTTPS_SERVER=1
+# Qt5 build is more stable through XWayland on Hyprland.
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+cd "$APP_DIR"
+exec "$APP_DIR/stremio" "$@"

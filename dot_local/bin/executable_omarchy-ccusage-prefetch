@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# omarchy-ccusage-prefetch: background ccusage data fetcher
+# Run this via systemd timer every 5 min or via cron.
+# Writes fresh cache that the dashboard reads instantly.
+set -euo pipefail
+
+export PATH="$HOME/.local/share/mise/installs/node/25.9.0/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+CACHE="$HOME/.cache/omarchy-ccusage-report/sources.json"
+
+mkdir -p "$(dirname "$CACHE")"
+
+TODAY=$(date +%Y-%m-%d)
+SINCE=$(date -d "6 days ago" +%Y%m%d)
+
+# Fetch all sources in parallel and merge
+python3 - "$CACHE" "$TODAY" "$SINCE" <<'PY'
+import json, os, shutil, subprocess, sys, tempfile, time
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+cache_path, today, since = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def ccusage_bin():
+    candidates = [
+        os.environ.get("CCUSAGE_BIN"),
+        os.path.expanduser("~/.local/share/mise/installs/node/25.9.0/bin/ccusage"),
+        shutil.which("ccusage"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return "ccusage"
+
+def ccusage_cmd(*args):
+    return [ccusage_bin(), *args]
+
+def run(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        if r.returncode == 0 and r.stdout.strip():
+            return json.loads(r.stdout), None
+        return {}, (r.stderr.strip() or f"exit {r.returncode}")
+    except Exception as exc:
+        return {}, str(exc)
+
+commands = {
+    "claude_week":      ccusage_cmd("claude", "daily", "--json", "--since", since),
+    "codex_week":       ccusage_cmd("codex", "daily", "--json", "--since", since),
+    "opencode_week":    ccusage_cmd("opencode", "daily", "--json", "--since", since),
+    "claude_all":       ccusage_cmd("claude", "daily", "--json"),
+    "codex_all":        ccusage_cmd("codex", "daily", "--json"),
+    "opencode_all":     ccusage_cmd("opencode", "daily", "--json"),
+    "claude_sessions":  ccusage_cmd("claude", "session", "--json"),
+    "codex_sessions":   ccusage_cmd("codex", "session", "--json"),
+    "opencode_sessions":ccusage_cmd("opencode", "session", "--json"),
+    "monthly":          ccusage_cmd("monthly", "--json"),
+}
+
+sources = {
+    "kind": "sources",
+    "generated_at": datetime.now(timezone.utc).isoformat(),
+    "generated_epoch": time.time(),
+    "commands": commands,
+    "cache": {"state": "prefetch", "age_seconds": 0, "path": cache_path},
+}
+
+with ThreadPoolExecutor(max_workers=5) as pool:
+    futures = {pool.submit(run, cmd): name for name, cmd in commands.items()}
+    failures = {}
+    for future in as_completed(futures):
+        name = futures[future]
+        data, error = future.result()
+        sources[name] = data
+        if error:
+            failures[name] = error
+
+if failures:
+    for name, error in sorted(failures.items()):
+        print(f"{name}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+if not any(sources.get(key) for key in ("claude_week", "codex_week", "opencode_week")):
+    print("no provider data returned; leaving existing cache untouched", file=sys.stderr)
+    raise SystemExit(1)
+
+cache_dir = os.path.dirname(cache_path)
+fd, tmp_path = tempfile.mkstemp(prefix="sources.", suffix=".tmp", dir=cache_dir)
+with os.fdopen(fd, "w") as f:
+    json.dump(sources, f, default=str)
+    f.write("\n")
+os.chmod(tmp_path, 0o600)
+os.replace(tmp_path, cache_path)
+os.chmod(cache_path, 0o600)
+PY

@@ -1,0 +1,52 @@
+# Files in the source tree that should NOT land in $HOME on `chezmoi apply`.
+README.md
+LICENSE
+bootstrap.sh
+doctor
+docs/
+.github/
+.editorconfig
+
+# metapac/ is a sidecar config for the metapac tool, not a $HOME target.
+# Lives in the source tree only; consumed by run_once_after_01-metapac-sync.sh.
+metapac
+metapac/**
+
+# Per-machine: skip macOS-specific (we're on Linux/Arch)
+{{ if ne .chezmoi.os "linux" -}}
+dot_config/hypr
+dot_config/waybar
+dot_config/walker
+dot_config/mako
+{{- end }}
+
+# State / cache files that may end up inside config dirs
+**/node_modules/**
+**/.cache/**
+**/cache/**
+**/*.log
+**/*.bak
+**/*.tmp
+**/tasks/**
+**/sessions/**
+
+# Editor/IDE local state
+**/.idea/**
+**/.vscode/**
+
+# Browser/runtime state (in case it sneaks in)
+**/Cookies
+**/Cookies-journal
+**/History
+**/History-journal
+
+# Secrets / API keys NOT yet encrypted (TODO: move to age-encrypted via 1Password)
+dot_config/aether/wallhaven.json
+
+# Symlinks whose absolute targets won't exist on a fresh machine until pkg installers run
+dot_local/bin/symlink_agent-browser
+dot_local/bin/symlink_hermes
+dot_local/bin/symlink_cmonitor
+dot_local/bin/symlink_ccmonitor
+dot_local/bin/symlink_cava
+dot_local/bin/symlink_brave

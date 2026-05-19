@@ -1,0 +1,15 @@
+# metapac group: audio-media
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+alsa-utils = "*"
+calf = "*"
+easyeffects = "*"
+mpd-mpris = "*"
+mpv = "*"
+pipewire = "*"
+pipewire-alsa = "*"
+pipewire-jack = "*"
+pipewire-pulse = "*"
+sof-firmware = "*"
+wireplumber = "*"

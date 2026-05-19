@@ -1,0 +1,112 @@
+#!/home/akshaybapat/.local/share/uv/tools/ytm-player/bin/python
+"""ytm-helper — single source of YT Music JSON for music-spotlight.
+Uses ytmusicapi directly (auth at ~/.config/ytm-player/auth.json written by
+/tmp/ytm-auth-from-chromium.py, periodically refreshed).
+
+Usage:
+    ytm-helper search "<query>"    # returns up to 25 song matches
+    ytm-helper history             # last 50 plays from your YT Music account
+    ytm-helper home                # personalized recommendations (flattened)
+    ytm-helper library             # your library songs (up to 200)
+
+Output: JSON array of {videoId, title, artist, duration, thumbnail, [shelf]}
+"""
+import json
+import sys
+from pathlib import Path
+
+AUTH = Path.home() / ".config" / "ytm-player" / "auth.json"
+if not AUTH.exists():
+    print(json.dumps([]))
+    print(f"ytm-helper: no {AUTH}", file=sys.stderr)
+    sys.exit(2)
+
+try:
+    from ytmusicapi import YTMusic
+except ImportError as e:
+    print(json.dumps([]))
+    print(f"ytm-helper: ytmusicapi unavailable: {e}", file=sys.stderr)
+    sys.exit(3)
+
+yt = YTMusic(str(AUTH))
+
+
+def _safe_get(obj, key, default=None):
+    """Get a key from obj if it's a dict, else default."""
+    return obj.get(key, default) if isinstance(obj, dict) else default
+
+
+def _thumb(item):
+    thumbs = _safe_get(item, "thumbnails") or []
+    if isinstance(thumbs, list) and thumbs:
+        last = thumbs[-1]
+        return _safe_get(last, "url") or ""
+    return ""
+
+
+def _artist(item):
+    artists = _safe_get(item, "artists") or []
+    if isinstance(artists, list) and artists:
+        first = artists[0]
+        return _safe_get(first, "name", "?") or "?"
+    return _safe_get(item, "artist") or _safe_get(item, "subtitle") or "?"
+
+
+def _flat(item, shelf=""):
+    if not isinstance(item, dict):
+        return None
+    vid = _safe_get(item, "videoId") or _safe_get(item, "playlistId")
+    if not vid:
+        return None
+    out = {
+        "videoId": vid,
+        "title":   _safe_get(item, "title", "?") or "?",
+        "artist":  _artist(item),
+        "duration": _safe_get(item, "duration", "?") or "?",
+        "thumbnail": _thumb(item),
+    }
+    if shelf:
+        out["shelf"] = shelf
+    return out
+
+
+def emit(items):
+    print(json.dumps([x for x in items if x], separators=(",", ":")))
+
+
+mode = sys.argv[1] if len(sys.argv) > 1 else "search"
+
+if mode == "search":
+    if len(sys.argv) < 3:
+        print(json.dumps([]))
+        print("usage: ytm-helper search <query>", file=sys.stderr)
+        sys.exit(1)
+    query = " ".join(sys.argv[2:])
+    results = yt.search(query, filter="songs", limit=25) or []
+    emit(_flat(r) for r in results)
+
+elif mode == "history":
+    rows = yt.get_history() or []
+    emit(_flat(r) for r in rows)
+
+elif mode == "home":
+    shelves = yt.get_home(limit=8) or []
+    flat = []
+    for shelf in shelves:
+        if not isinstance(shelf, dict):
+            continue
+        title = _safe_get(shelf, "title", "")
+        for it in _safe_get(shelf, "contents") or []:
+            r = _flat(it, shelf=title)
+            if r:
+                flat.append(r)
+    emit(flat)
+
+elif mode == "library":
+    rows = yt.get_library_songs(limit=200) or []
+    emit(_flat(r) for r in rows)
+
+else:
+    print(json.dumps([]))
+    print(f"ytm-helper: unknown mode {mode!r}", file=sys.stderr)
+    sys.exit(1)

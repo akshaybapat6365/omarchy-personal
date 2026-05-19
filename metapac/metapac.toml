@@ -1,0 +1,12 @@
+# metapac configuration — declarative package manager for Arch.
+# https://github.com/ripytide/metapac
+
+arch_package_managers       = ["paru", "pacman"]
+arch_default_package_manager = "paru"
+
+# Roundtrip semantics: `metapac sync` installs missing pkgs from groups;
+# `metapac clean` removes pkgs not in any group (review before running).
+hostname_groups_enabled = true
+
+# Group directory (relative to this file)
+# group_files in metapac/groups/*.toml — auto-discovered.

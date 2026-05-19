@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="${HOME}/.local/share/music-stack/root"
+bin_name="$(basename "$0")"
+
+export PATH="${root}/usr/bin:${PATH}"
+export LD_LIBRARY_PATH="${root}/usr/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export PYTHONPATH="${root}/usr/lib/python3.14/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
+export AO_PLUGIN_PATH="${root}/usr/lib/ao/plugins-4"
+
+exec "${root}/usr/bin/${bin_name}" "$@"

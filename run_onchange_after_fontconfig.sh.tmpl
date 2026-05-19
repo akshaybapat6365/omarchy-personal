@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Re-run on every change under ~/.config/fontconfig/ — refresh the system font cache.
+# Hash of fontconfig dir contents to invalidate when any file changes:
+#   {{ output "bash" "-c" "find \"$0/dot_config/fontconfig\" -type f -exec sha256sum {} + 2>/dev/null | sha256sum" .chezmoi.sourceDir }}
+set -euo pipefail
+log() { printf '[chezmoi/fontconfig] %s\n' "$*"; }
+
+command -v fc-cache >/dev/null 2>&1 || { log "fc-cache not present; skipping"; exit 0; }
+
+log "rebuilding font cache (fc-cache -f)"
+fc-cache -f >/dev/null 2>&1 || true
+log "done"

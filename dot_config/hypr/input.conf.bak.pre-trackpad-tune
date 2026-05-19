@@ -1,0 +1,59 @@
+# Control your input devices
+# See https://wiki.hypr.land/Configuring/Variables/#input
+input {
+  kb_layout = us
+  kb_options = compose:caps
+
+  repeat_rate = 40
+  repeat_delay = 250
+
+  numlock_by_default = true
+  sensitivity = 0.15
+  accel_profile = adaptive
+
+  touchpad {
+    # macOS-style natural (inverse) scrolling
+    natural_scroll = true
+
+    # Tap/click behavior: 1 finger = left, 2 = right, 3 = middle.
+    tap-to-click = true
+    tap-and-drag = true
+    drag_lock = 1
+    clickfinger_behavior = true
+    tap_button_map = lrm
+
+    # Keep 3-finger gestures available for workspace navigation.
+    # Set this to 1 later if you prefer macOS accessibility-style drag.
+    drag_3fg = 0
+
+    # Smoother, still responsive scroll for that high-DPI feel
+    scroll_factor = 0.65
+
+    # Keep trackpad responsive while typing
+    disable_while_typing = false
+  }
+}
+
+# Scroll nicely in the terminal
+windowrule = match:class (Alacritty|kitty), scroll_touchpad 1.0
+windowrule = match:class com.mitchellh.ghostty, scroll_touchpad 1.0
+
+gestures {
+  workspace_swipe_distance = 220
+  workspace_swipe_cancel_ratio = 0.35
+  workspace_swipe_min_speed_to_force = 12
+  workspace_swipe_create_new = false
+  workspace_swipe_direction_lock = true
+  workspace_swipe_direction_lock_threshold = 8
+}
+
+# ---- Trackpad gestures ----
+# Hyprland owns the gestures that need compositor-native, 1:1 movement.
+gesture = 3, horizontal, workspace
+gesture = 4, horizontal, workspace
+gesture = 3, up, dispatcher, hyprexpo:expo, toggle
+gesture = 3, down, dispatcher, hyprexpo:expo, toggle
+gesture = 4, pinchin, dispatcher, exec, omarchy-launch-walker
+gesture = 4, pinchout, dispatcher, workspace, empty
+
+# Two-finger scroll and app-native two-finger pinch are left to libinput/apps.

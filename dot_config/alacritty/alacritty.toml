@@ -1,0 +1,40 @@
+general.import = [ "~/.config/omarchy/current/theme/alacritty.toml" ]
+
+# Dense TUIs like Hermes render much more cleanly when the terminal surface is
+# fully opaque and background-colored cells are not translucent.
+colors.transparent_background_colors = false
+
+# Codex/Hermes render metadata with dim/secondary colors; the active Omarchy
+# theme's dim + black entries were too close to the background to read cleanly.
+colors.primary.dim_foreground = "#9ca3af"
+colors.normal.black = "#4b5563"
+colors.bright.black = "#6b7280"
+
+[env]
+TERM = "xterm-256color"
+
+[terminal]
+osc52 = "CopyPaste"
+
+[font]
+normal = { family = "JetBrainsMono Nerd Font", style = "Regular" }
+bold = { family = "JetBrainsMono Nerd Font", style = "Bold" }
+italic = { family = "JetBrainsMono Nerd Font", style = "Italic" }
+size = 9
+
+[window]
+opacity = 1.0
+padding.x = 14
+padding.y = 14
+decorations = "None"
+
+[keyboard]
+bindings = [
+{ key = "Insert", mods = "Shift", action = "Paste" },
+{ key = "Insert", mods = "Control", action = "Copy" },
+{ key = "Equals", mods = "Control", action = "IncreaseFontSize" },
+{ key = "Plus", mods = "Control|Shift", action = "IncreaseFontSize" },
+{ key = "Minus", mods = "Control", action = "DecreaseFontSize" },
+{ key = "Key0", mods = "Control", action = "ResetFontSize" },
+{ key = "Return", mods = "Shift", chars = "\u001B\r" }
+]

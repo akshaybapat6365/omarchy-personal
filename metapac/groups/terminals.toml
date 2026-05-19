@@ -1,0 +1,7 @@
+# metapac group: terminals
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+alacritty = "*"
+ghostty = "*"
+kitty = "*"

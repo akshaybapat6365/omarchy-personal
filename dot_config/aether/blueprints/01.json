@@ -1,0 +1,46 @@
+{
+  "name": "01",
+  "palette": {
+    "colors": [
+      "#000000",
+      "#996b6f",
+      "#59846d",
+      "#718a67",
+      "#7b8ab0",
+      "#a488ab",
+      "#70a8b0",
+      "#F2E8FA",
+      "#686163",
+      "#c28d92",
+      "#5a9777",
+      "#7a9c6b",
+      "#8598cc",
+      "#b993c3",
+      "#6bbbc7",
+      "#f7f8ff"
+    ],
+    "wallpaper": "/home/akshaybapat/.local/share/aether/wallpapers/wallhaven-y81pvg.png",
+    "extendedColors": {
+      "accent": "#7b8ab0",
+      "cursor": "#F2E8FA",
+      "selection_background": "#F2E8FA",
+      "selection_foreground": "#000000"
+    }
+  },
+  "adjustments": {
+    "blackPoint": 0,
+    "brightness": 0,
+    "contrast": 0,
+    "gamma": 1,
+    "highlights": 0,
+    "hueShift": 0,
+    "saturation": 0,
+    "shadows": 0,
+    "temperature": 0,
+    "tint": 0,
+    "vibrance": 0,
+    "whitePoint": 0
+  },
+  "settings": {},
+  "timestamp": 1778992250456
+}

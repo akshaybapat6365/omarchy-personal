@@ -1,0 +1,110 @@
+#!/home/akshaybapat/.local/share/uv/tools/ytm-player/bin/python
+"""ytm-auth-refresh — re-extract YT Music cookies from Chromium Profile 1
+and write a fresh ~/.config/ytm-player/auth.json. Idempotent. Silent on
+success; loud on failure (notify-send). Designed to be invoked on every
+music-launch and by a 20-min systemd user timer.
+"""
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from yt_dlp.cookies import extract_cookies_from_browser
+
+
+class _Logger:
+    def debug(self, *a, **k): pass
+    def info(self, *a, **k): pass
+    def warning(self, *a, **k): pass
+    def error(self, m, **k): pass
+
+
+def fail(msg: str, code: int = 1):
+    """notify-send and exit non-zero. Won't raise if notify-send is absent."""
+    try:
+        subprocess.run(
+            ["notify-send", "-t", "5000", "-u", "critical",
+             "Music auth", msg],
+            check=False,
+        )
+    except FileNotFoundError:
+        pass
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+# 1. Extract cookies via the gnome-keyring path verified in Phase 6
+KEYRINGS = ["GNOMEKEYRING", "BASICTEXT", "KWALLET5", "KWALLET6", "KWALLET"]
+jar = None
+for kr in KEYRINGS:
+    try:
+        candidate = extract_cookies_from_browser(
+            browser_name="chromium",
+            profile="Profile 1",
+            keyring=kr,
+            logger=_Logger(),
+        )
+        for c in candidate:
+            if (c.domain.lstrip(".").endswith("youtube.com")
+                    and c.name == "SAPISID" and c.value):
+                jar = candidate
+                break
+        if jar:
+            break
+    except Exception:
+        continue
+
+if jar is None:
+    fail("Cookie extraction failed — open music.youtube.com in Chromium "
+         "(Profile 1) and sign in, then retry.")
+
+# 2. Filter to the YT Music cookies ytmusicapi cares about
+WANTED = {
+    "SAPISID", "__Secure-3PAPISID", "SID", "HSID", "SSID", "APISID",
+    "LOGIN_INFO", "VISITOR_INFO1_LIVE", "YSC", "PREF",
+    "__Secure-1PSID", "__Secure-3PSID", "__Secure-1PAPISID",
+    "__Secure-1PSIDCC", "__Secure-3PSIDCC",
+    "__Secure-1PSIDTS", "__Secure-3PSIDTS", "SIDCC",
+}
+cookies = {
+    c.name: c.value
+    for c in jar
+    if (c.domain.lstrip(".").endswith("youtube.com")
+        and c.name in WANTED and c.value)
+}
+if "SAPISID" not in cookies:
+    fail("No SAPISID — Chromium session has no YT Music auth.")
+
+# 3. Build the headers dict (LOWERCASE keys — ytm-player's
+#    is_authenticated() checks `data.get("cookie")` strictly lowercase)
+ORIGIN = "https://music.youtube.com"
+ts = int(time.time())
+sapisid = cookies["SAPISID"]
+sha1 = hashlib.sha1(f"{ts} {sapisid} {ORIGIN}".encode()).hexdigest()
+UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/147.0.7727.0 Safari/537.36")
+
+headers = {
+    "user-agent": UA,
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "accept-language": "en-US,en;q=0.5",
+    "content-type": "application/json",
+    "origin": ORIGIN,
+    "referer": ORIGIN + "/",
+    "x-origin": ORIGIN,
+    "x-goog-authuser": "0",
+    "cookie": "; ".join(f"{k}={v}" for k, v in cookies.items()),
+    "authorization": f"SAPISIDHASH {ts}_{sha1}",
+}
+
+# 4. Write atomically (tmp + rename)
+AUTH = Path.home() / ".config" / "ytm-player" / "auth.json"
+AUTH.parent.mkdir(parents=True, exist_ok=True)
+tmp = AUTH.with_suffix(".json.tmp")
+tmp.write_text(json.dumps(headers, separators=(",", ":")))
+os.chmod(tmp, 0o600)
+tmp.rename(AUTH)

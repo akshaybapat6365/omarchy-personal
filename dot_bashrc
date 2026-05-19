@@ -1,0 +1,53 @@
+# If not running interactively, don't do anything (leave this at the top of this file)
+[[ $- != *i* ]] && return
+
+# All the default Omarchy aliases and functions
+# (don't mess with these directly, just overwrite them here!)
+source ~/.local/share/omarchy/default/bash/rc
+
+# Add your own exports, aliases, and functions here.
+#
+# Make an alias for invoking commands you use constantly
+# alias p='python'
+
+# play <song name> — stream first YouTube hit as audio in mpv
+play() { mpv --no-video --ytdl-format=bestaudio "ytdl://ytsearch1:$*"; }
+# pick <song name> — show top 5 hits, use > / < to skip
+pick() { mpv --no-video --ytdl-format=bestaudio "ytdl://ytsearch5:$*"; }
+
+# Atuin: fuzzy-search shell history (↑ key opens fullscreen search)
+eval "$(atuin init bash)"
+
+# Yazi: `y` opens the file manager and cd's into the dir you exit at
+y() {
+    local tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
+    yazi "$@" --cwd-file="$tmp"
+    if cwd="$(cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+        builtin cd -- "$cwd"
+    fi
+    rm -f -- "$tmp"
+}
+
+. "$HOME/.local/share/../bin/env"
+
+# >>> hermes godmode tui >>>
+# Prefer the modern Hermes Ink TUI for interactive Hermes sessions.
+export HERMES_TUI=1
+export HERMES_TUI_THEME=dark
+export HERMES_TUI_DIR="$HOME/.hermes/hermes-agent/ui-tui"
+export HERMES_REDACT_SECRETS=true
+alias hermesy='hermes-yolo'
+# <<< hermes godmode tui <<<
+
+
+# cline + kanban
+alias kanban='npx kanban'
+alias clp='cline -p'
+
+# wallpaper picker apps (installed 2026-05-17)
+alias var='variety'
+alias hida='hidamari'
+
+# Zed CLI editor (blocks until buffer closed, like nvim for git)
+export EDITOR="zed --wait"
+export VISUAL="zed --wait"

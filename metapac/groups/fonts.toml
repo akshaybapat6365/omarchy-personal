@@ -1,0 +1,7 @@
+# metapac group: fonts
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+inter-font = "*"
+ttf-ia-writer = "*"
+ttf-jetbrains-mono-nerd = "*"

@@ -1,0 +1,848 @@
+#!/usr/bin/env bash
+# Open or print a curated Claude + Codex spend dashboard.
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+  exec alacritty --class ai-ccusage --title ai-ccusage --hold -e "$0" --print
+fi
+
+export PATH="$HOME/.local/share/mise/installs/node/25.9.0/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+
+python - "$@" <<'PY'
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+try:
+    from rich import box
+    from rich.columns import Columns
+    from rich.console import Console, Group
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    RICH_AVAILABLE = True
+except Exception:
+    RICH_AVAILABLE = False
+
+ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+CACHE_TTL_SECONDS = 300
+PROVIDERS = ("claude", "codex", "opencode")
+MISE_NODE_BIN = Path.home() / ".local/share/mise/installs/node/25.9.0/bin"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Claude + Codex spend dashboard")
+    parser.add_argument("--print", action="store_true", help="render and exit")
+    parser.add_argument("--refresh", action="store_true", help="bypass cache and refresh sources")
+    parser.add_argument("--no-cache", action="store_true", help="do not read or write cache")
+    parser.add_argument("--color", choices=("auto", "always", "never"), default="auto")
+    parser.add_argument("--format", choices=("ansi", "plain", "json"), default="ansi")
+    parser.add_argument("--width", type=int, default=0, help="render width")
+    parser.add_argument("--input", help="fixture/model JSON input path")
+    return parser.parse_args()
+
+
+def terminal_width(requested: int) -> int:
+    if requested:
+        return max(40, min(120, requested))
+    return max(40, min(100, shutil.get_terminal_size((80, 24)).columns))
+
+
+def use_color(args: argparse.Namespace) -> bool:
+    if args.format == "plain" or args.color == "never":
+        return False
+    if args.color == "always":
+        return True
+    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+        return False
+    return sys.stdout.isatty()
+
+
+class Palette:
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self.reset = "\033[0m" if enabled else ""
+        self.bold = "\033[1m" if enabled else ""
+        self.dim = "\033[2m" if enabled else ""
+        self.muted = "\033[38;2;115;121;132m" if enabled else ""
+        self.soft = "\033[38;2;190;196;207m" if enabled else ""
+        self.claude = "\033[38;2;117;184;200m" if enabled else ""
+        self.codex = "\033[38;2;199;164;86m" if enabled else ""
+        self.warn = "\033[38;2;224;172;80m" if enabled else ""
+        self.danger = "\033[38;2;232;112;94m" if enabled else ""
+        self.ok = "\033[38;2;142;192;124m" if enabled else ""
+        self.panel = "\033[38;2;75;82;96m" if enabled else ""
+
+    def wrap(self, text: str, style: str) -> str:
+        return f"{style}{text}{self.reset}" if style else text
+
+
+def visible_len(text: str) -> int:
+    return len(ANSI_RE.sub("", text))
+
+
+def trim(text: Any, width: int) -> str:
+    value = " ".join(str(text if text is not None else "-").split())
+    if visible_len(value) <= width:
+        return value
+    if width <= 1:
+        return value[:width]
+    return value[: width - 1] + "…"
+
+
+def fit(text: str, width: int, align: str = "<") -> str:
+    text = trim(text, width)
+    pad = max(0, width - visible_len(text))
+    if align == ">":
+        return " " * pad + text
+    return text + " " * pad
+
+
+def row(left: str, right: str, width: int) -> str:
+    gap = max(1, width - visible_len(left) - visible_len(right))
+    return left + " " * gap + right
+
+
+def money(value: Any) -> str:
+    value = float(value or 0)
+    if abs(value) >= 1_000_000:
+        return f"${value / 1_000_000:.1f}M"
+    if abs(value) >= 1000:
+        return f"${value / 1000:.1f}k"
+    return f"${value:.2f}"
+
+
+def number(value: Any) -> str:
+    value = float(value or 0)
+    if abs(value) >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}B"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.0f}k"
+    return str(int(value))
+
+
+def pct(part: float, whole: float) -> int:
+    return 0 if whole <= 0 else int(round((part / whole) * 100))
+
+
+def bar(part: float, whole: float, width: int) -> str:
+    if width < 8:
+        return f"{pct(part, whole)}%"
+    if whole <= 0:
+        return "[" + "." * width + "]"
+    fill = max(0, min(width, int(round((part / whole) * width))))
+    return "[" + "#" * fill + "." * (width - fill) + "]"
+
+
+def split_gauge(left: float, right: float, width: int, palette: Palette) -> str:
+    width = max(8, width)
+    total = left + right
+    if total <= 0:
+        return palette.wrap("·" * width, palette.muted)
+    left_cells = max(0, min(width, int(round((left / total) * width))))
+    right_cells = width - left_cells
+    if palette.enabled:
+        return palette.wrap("█" * left_cells, palette.claude) + palette.wrap("█" * right_cells, palette.codex)
+    return "C" * left_cells + "X" * right_cells
+
+
+def rich_bar(value: float, total: float, width: int, style: str = "cyan") -> Any:
+    width = max(6, width)
+    if not RICH_AVAILABLE:
+        return bar(value, total, width)
+    if total <= 0:
+        return Text("░" * width, style="dim")
+    fill = max(0, min(width, int(round((value / total) * width))))
+    text = Text()
+    text.append("█" * fill, style=style)
+    text.append("░" * (width - fill), style="grey42")
+    return text
+
+
+def rich_split(left: float, right: float, width: int) -> Any:
+    width = max(8, width)
+    if not RICH_AVAILABLE:
+        return split_gauge(left, right, width, Palette(False))
+    total = left + right
+    if total <= 0:
+        return Text("░" * width, style="grey42")
+    left_cells = max(0, min(width, int(round((left / total) * width))))
+    text = Text()
+    text.append("█" * left_cells, style="bold cyan")
+    text.append("█" * (width - left_cells), style="bold orange3")
+    return text
+
+
+def rich_spark(values: list[float]) -> Any:
+    if not RICH_AVAILABLE:
+        return sparkline(values, 12)
+    chars = "▁▂▃▄▅▆▇█"
+    if not values:
+        return Text("─" * 7, style="grey42")
+    high = max(values)
+    low = min(values)
+    if high <= low:
+        return Text((chars[0] if high == 0 else chars[-1]) * len(values), style="#5e81ac")
+    text = Text()
+    for value in values:
+        idx = int(round(((value - low) / (high - low)) * (len(chars) - 1)))
+        text.append(chars[idx], style="#bf616a" if value == high else "#5e81ac")
+    return text
+
+
+def sparkline(values: list[float], width: int) -> str:
+    ticks = "_.-:=+*#"
+    if not values:
+        return "-" * min(width, 7)
+    values = values[-width:]
+    high = max(values)
+    low = min(values)
+    if high <= low:
+        return ticks[0] * len(values) if high == 0 else ticks[-1] * len(values)
+    out = []
+    for value in values:
+        idx = int(round(((value - low) / (high - low)) * (len(ticks) - 1)))
+        out.append(ticks[idx])
+    return "".join(out)
+
+
+def boxed(title: str, body: list[str], width: int, palette: Palette) -> list[str]:
+    inner = max(20, width - 4)
+    title_text = f" {title} "
+    top = "╭" + title_text + "─" * max(0, inner - visible_len(title_text)) + "╮"
+    bottom = "╰" + "─" * inner + "╯"
+    if not palette.enabled:
+        top = "+ " + title + " " + "-" * max(0, inner - visible_len(title_text)) + "+"
+        bottom = "+" + "-" * inner + "+"
+    lines = [palette.wrap(top, palette.panel)]
+    for line in body:
+        lines.append(palette.wrap("│ ", palette.panel) + fit(line, inner) + palette.wrap(" │", palette.panel))
+    lines.append(palette.wrap(bottom, palette.panel))
+    return lines
+
+
+def status_for(today_total: float, warnings: list[dict[str, str]], cache_state: str) -> str:
+    if any(w.get("level") == "danger" for w in warnings):
+        return "UNAVAILABLE"
+    if cache_state == "stale":
+        return "STALE"
+    if today_total >= 100:
+        return "OVER"
+    if today_total >= 25:
+        return "WARN"
+    return "OK"
+
+
+def cache_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME")
+    return Path(base).expanduser() / "omarchy-ccusage-report" if base else Path.home() / ".cache/omarchy-ccusage-report"
+
+
+def cache_file() -> Path:
+    return cache_dir() / "sources.json"
+
+
+def ccusage_bin() -> str:
+    for candidate in (os.environ.get("CCUSAGE_BIN"), str(MISE_NODE_BIN / "ccusage"), shutil.which("ccusage")):
+        if candidate and Path(candidate).exists():
+            return str(Path(candidate))
+    return "ccusage"
+
+
+def ccusage_cmd(*args: str) -> list[str]:
+    return [ccusage_bin(), *args]
+
+
+def load_cache() -> tuple[dict[str, Any] | None, list[dict[str, str]], str]:
+    path = cache_file()
+    if not path.exists():
+        return None, [], "miss"
+    try:
+        payload = json.loads(path.read_text())
+    except Exception as exc:
+        return None, [{"level": "warn", "message": f"Corrupt cache ignored: {exc}"}], "corrupt"
+    age = time.time() - float(payload.get("generated_epoch") or 0)
+    state = "fresh" if age <= CACHE_TTL_SECONDS else "stale"
+    payload["cache"] = {
+        "state": state,
+        "age_seconds": int(max(0, age)),
+        "path": str(path),
+        "generated_at": payload.get("generated_at"),
+    }
+    return payload, [], state
+
+
+def write_cache(sources: dict[str, Any]) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
+    path = cache_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix="sources.", suffix=".tmp", dir=str(path.parent))
+        with os.fdopen(fd, "w") as tmp:
+            json.dump(sources, tmp, sort_keys=True)
+            tmp.write("\n")
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, path)
+        os.chmod(path, 0o600)
+    except Exception as exc:
+        warnings.append({"level": "warn", "message": f"Cache write failed: {exc}"})
+    return warnings
+
+
+def command_json(name: str, cmd: list[str]) -> tuple[dict[str, Any], dict[str, str] | None]:
+    try:
+        proc = subprocess.run(cmd, check=False, text=True, capture_output=True, timeout=20)
+    except FileNotFoundError:
+        searched = f"{MISE_NODE_BIN / 'ccusage'}, PATH"
+        return {}, {"level": "danger", "message": f"{name} unavailable: ccusage not found ({searched})"}
+    except Exception as exc:
+        return {}, {"level": "danger", "message": f"{name} unavailable: {exc}"}
+    if proc.returncode != 0 or not proc.stdout.strip():
+        detail = trim(proc.stderr.strip() or f"exit {proc.returncode}", 120)
+        return {}, {"level": "danger", "message": f"{name} unavailable: {detail}"}
+    try:
+        return json.loads(proc.stdout), None
+    except Exception as exc:
+        return {}, {"level": "danger", "message": f"{name} invalid JSON: {exc}"}
+
+
+def load_live_sources(refresh: bool, no_cache: bool) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    warnings: list[dict[str, str]] = []
+    cached: dict[str, Any] | None = None
+    if not refresh and not no_cache:
+        cached, cache_warnings, cache_state = load_cache()
+        warnings.extend(cache_warnings)
+        if cached and cache_state == "fresh":
+            return cached, warnings
+
+    today = date.today()
+    since = (today - timedelta(days=6)).strftime("%Y%m%d")
+    commands = {
+        "claude_week": ccusage_cmd("claude", "daily", "--json", "--since", since),
+        "codex_week": ccusage_cmd("codex", "daily", "--json", "--since", since),
+        "opencode_week": ccusage_cmd("opencode", "daily", "--json", "--since", since),
+        "claude_all": ccusage_cmd("claude", "daily", "--json"),
+        "codex_all": ccusage_cmd("codex", "daily", "--json"),
+        "opencode_all": ccusage_cmd("opencode", "daily", "--json"),
+        "claude_sessions": ccusage_cmd("claude", "session", "--json"),
+        "codex_sessions": ccusage_cmd("codex", "session", "--json"),
+        "opencode_sessions": ccusage_cmd("opencode", "session", "--json"),
+        "monthly": ccusage_cmd("monthly", "--json"),
+    }
+    sources: dict[str, Any] = {
+        "kind": "sources",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_epoch": time.time(),
+        "commands": commands,
+        "cache": {"state": "live", "age_seconds": 0, "path": str(cache_file())},
+    }
+    for name, cmd in commands.items():
+        data, warning = command_json(name.replace("_", " "), cmd)
+        sources[name] = data
+        if warning:
+            warnings.append(warning)
+
+    has_danger = any(w.get("level") == "danger" for w in warnings)
+    has_data = any(isinstance(sources.get(key), dict) and bool(sources.get(key)) for key in ("claude_week", "codex_week", "opencode_week"))
+    if has_danger and cached:
+        cached_warnings = [{"level": "warn", "message": "Using stale cache because live ccusage failed"}]
+        return cached, cached_warnings + warnings[:4]
+    if not no_cache and not has_danger and has_data:
+        warnings.extend(write_cache(sources))
+    return sources, warnings
+
+
+def load_fixture(path: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    try:
+        payload = json.loads(Path(path).read_text())
+    except Exception as exc:
+        return {"kind": "sources"}, [{"level": "danger", "message": f"Fixture unavailable: {exc}"}]
+    if payload.get("kind") == "model" or "providers" in payload:
+        return {"model": payload, "kind": "model_wrapper"}, []
+    if payload.get("sources"):
+        return payload["sources"], payload.get("warnings", [])
+    return payload, payload.get("warnings", []) if isinstance(payload.get("warnings"), list) else []
+
+
+def rows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    value = data.get("daily")
+    return value if isinstance(value, list) else []
+
+
+def row_date(row: dict[str, Any]) -> str:
+    return str(row.get("date") or row.get("period") or "")
+
+
+def cost(row: dict[str, Any], preferred: str) -> float:
+    try:
+        return float(row.get(preferred) or row.get("totalCost") or row.get("costUSD") or 0)
+    except Exception:
+        return 0.0
+
+
+def tokens(row: dict[str, Any]) -> int:
+    try:
+        return int(row.get("totalTokens") or 0)
+    except Exception:
+        return 0
+
+
+def total_cost(data: dict[str, Any], preferred: str) -> float:
+    totals = data.get("totals") if isinstance(data.get("totals"), dict) else {}
+    try:
+        return float(totals.get(preferred) or totals.get("totalCost") or totals.get("costUSD") or 0)
+    except Exception:
+        return 0.0
+
+
+def total_tokens(data: dict[str, Any]) -> int:
+    totals = data.get("totals") if isinstance(data.get("totals"), dict) else {}
+    try:
+        return int(totals.get("totalTokens") or 0)
+    except Exception:
+        return 0
+
+
+def day_value(data: dict[str, Any], preferred: str, day: date) -> tuple[float, int]:
+    iso = day.isoformat()
+    found = [row for row in rows(data) if row_date(row) == iso]
+    return sum(cost(row, preferred) for row in found), sum(tokens(row) for row in found)
+
+
+def session_when(provider: str, row: dict[str, Any]) -> str:
+    raw = str(row.get("lastActivity") or "")
+    if provider == "codex" and raw.endswith("Z"):
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone().strftime("%m/%d %H:%M")
+        except ValueError:
+            pass
+    if len(raw) >= 10:
+        try:
+            return datetime.fromisoformat(raw[:10]).strftime("%m/%d")
+        except ValueError:
+            return raw[:10]
+    return "-"
+
+
+def session_models(provider: str, row: dict[str, Any]) -> str:
+    values = row.get("modelsUsed") or [] if provider == "claude" else list((row.get("models") or {}).keys())
+    clean = [str(v).replace("claude-", "").replace("-20251001", "") for v in values]
+    return ", ".join(clean[:2]) if clean else "-"
+
+
+def session_ref(provider: str, row: dict[str, Any]) -> str:
+    if provider == "codex":
+        raw = str(row.get("sessionFile") or row.get("sessionId") or "").replace("rollout-", "")
+        return raw[-8:] if raw else "-"
+    raw = str(row.get("sessionId") or "")
+    return raw.split("-")[0][:8] if raw else "-"
+
+
+def normalize(sources: dict[str, Any], source_warnings: list[dict[str, str]]) -> dict[str, Any]:
+    if sources.get("model"):
+        model = sources["model"]
+        existing = model.get("warnings") if isinstance(model.get("warnings"), list) else []
+        model["warnings"] = existing + source_warnings
+        return model
+
+    today = date.today()
+    claude_week = sources.get("claude_week") if isinstance(sources.get("claude_week"), dict) else {}
+    codex_week = sources.get("codex_week") if isinstance(sources.get("codex_week"), dict) else {}
+    opencode_week = sources.get("opencode_week") if isinstance(sources.get("opencode_week"), dict) else {}
+    claude_all = sources.get("claude_all") if isinstance(sources.get("claude_all"), dict) else {}
+    codex_all = sources.get("codex_all") if isinstance(sources.get("codex_all"), dict) else {}
+    opencode_all = sources.get("opencode_all") if isinstance(sources.get("opencode_all"), dict) else {}
+    claude_sessions = sources.get("claude_sessions") if isinstance(sources.get("claude_sessions"), dict) else {}
+    codex_sessions = sources.get("codex_sessions") if isinstance(sources.get("codex_sessions"), dict) else {}
+    opencode_sessions = sources.get("opencode_sessions") if isinstance(sources.get("opencode_sessions"), dict) else {}
+    monthly_data = sources.get("monthly") if isinstance(sources.get("monthly"), dict) else {}
+    daily: list[dict[str, Any]] = []
+    for offset in range(6, -1, -1):
+        day = today - timedelta(days=offset)
+        c_cost, c_tokens = day_value(claude_week, "totalCost", day)
+        x_cost, x_tokens = day_value(codex_week, "costUSD", day)
+        o_cost, o_tokens = day_value(opencode_week, "totalCost", day)
+        daily.append({
+            "date": day.isoformat(),
+            "label": day.strftime("%a %m/%d"),
+            "claude_cost": c_cost,
+            "codex_cost": x_cost,
+            "opencode_cost": o_cost,
+            "total_cost": c_cost + x_cost + o_cost,
+            "tokens": c_tokens + x_tokens + o_tokens,
+        })
+
+    session_rows: list[dict[str, Any]] = []
+    for provider, data, key in (("claude", claude_sessions, "totalCost"), ("codex", codex_sessions, "costUSD"), ("opencode", opencode_sessions, "totalCost")):
+        raw_sessions = data.get("sessions") if isinstance(data.get("sessions"), list) else []
+        for item in raw_sessions:
+            value = cost(item, key)
+            if value <= 0:
+                continue
+            session_rows.append({
+                "provider": provider,
+                "cost": value,
+                "tokens": tokens(item),
+                "when": session_when(provider, item),
+                "model": session_models(provider, item),
+                "ref": session_ref(provider, item),
+            })
+    session_rows.sort(key=lambda item: item["cost"], reverse=True)
+
+    providers = {
+        "claude": {
+            "today_cost": daily[-1]["claude_cost"] if daily else 0,
+            "lifetime_cost": total_cost(claude_all, "totalCost"),
+            "tokens": total_tokens(claude_all),
+        },
+        "codex": {
+            "today_cost": daily[-1]["codex_cost"] if daily else 0,
+            "lifetime_cost": total_cost(codex_all, "costUSD"),
+            "tokens": total_tokens(codex_all),
+        },
+        "opencode": {
+            "today_cost": daily[-1]["opencode_cost"] if daily else 0,
+            "lifetime_cost": total_cost(opencode_all, "totalCost"),
+            "tokens": total_tokens(opencode_all),
+        },
+    }
+    total_today = providers["claude"]["today_cost"] + providers["codex"]["today_cost"] + providers["opencode"]["today_cost"]
+    total_lifetime = providers["claude"]["lifetime_cost"] + providers["codex"]["lifetime_cost"] + providers["opencode"]["lifetime_cost"]
+    total_tokens_value = providers["claude"]["tokens"] + providers["codex"]["tokens"] + providers["opencode"]["tokens"]
+    warnings = list(source_warnings)
+    cache = sources.get("cache") if isinstance(sources.get("cache"), dict) else {"state": "unknown", "age_seconds": 0}
+    status = status_for(total_today, warnings, str(cache.get("state") or "unknown"))
+    return {
+        "kind": "model",
+        "version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "today": today.isoformat(),
+        "status": status,
+        "cache": cache,
+        "totals": {"today_cost": total_today, "lifetime_cost": total_lifetime, "tokens": total_tokens_value},
+        "providers": providers,
+        "daily": daily,
+        "sessions": session_rows[:10],
+        "monthly": [{"period": m.get("period",""), "total_cost": float(m.get("totalCost") or 0)} for m in (monthly_data.get("monthly") if isinstance(monthly_data.get("monthly"), list) else [])],
+        "warnings": warnings,
+    }
+
+
+def render(model: dict[str, Any], width: int, palette: Palette) -> str:
+    lines: list[str] = []
+    totals = model.get("totals") or {}
+    providers = model.get("providers") or {}
+    claude = providers.get("claude") or {}
+    codex = providers.get("codex") or {}
+    opencode = providers.get("opencode") or {}
+    daily = model.get("daily") if isinstance(model.get("daily"), list) else []
+    sessions = model.get("sessions") if isinstance(model.get("sessions"), list) else []
+    monthly = model.get("monthly") if isinstance(model.get("monthly"), list) else []
+    warnings = model.get("warnings") if isinstance(model.get("warnings"), list) else []
+    cache = model.get("cache") if isinstance(model.get("cache"), dict) else {}
+    status = str(model.get("status") or "OK")
+    status_label = {"OK": "steady", "WARN": "warm", "OVER": "high", "STALE": "stale", "UNAVAILABLE": "partial"}.get(status, status.lower())
+    status_style = palette.ok if status == "OK" else palette.warn if status in {"WARN", "OVER", "STALE"} else palette.danger
+    now = datetime.now().strftime("%a %m/%d %H:%M")
+    cache_state = str(cache.get("state") or "unknown")
+    cache_age = int(cache.get("age_seconds") or 0)
+    right = f"{now}  {cache_state} {cache_age}s"
+
+    today_cost = float(totals.get("today_cost") or 0)
+    token_total = float(totals.get("tokens") or 0)
+    lifetime = money(totals.get("lifetime_cost") or 0)
+    split_total = float(claude.get("today_cost") or 0) + float(codex.get("today_cost") or 0) + float(opencode.get("today_cost") or 0)
+    c_pct = pct(float(claude.get("today_cost") or 0), split_total)
+    x_pct = pct(float(codex.get("today_cost") or 0), split_total)
+    o_pct = max(0, 100 - c_pct - x_pct) if split_total > 0 else 0
+    gauge_width = max(10, min(28, width - 44))
+
+    title = palette.wrap("AI COST OPS", palette.bold + palette.soft)
+    right_title = palette.wrap(right, palette.dim)
+    lines.append(row(title, right_title, width))
+    lines.append(palette.wrap("━" * width if palette.enabled else "=" * width, palette.panel))
+    lines.append("")
+
+    hero_body = [
+        row(f"SPEND {palette.wrap(money(today_cost), palette.bold + status_style)}", f"{status_label.upper()}", width - 4),
+        row(f"TOKENS {number(token_total)}", f"LIFETIME {lifetime}", width - 4),
+        f"C {money(claude.get('today_cost'))} {c_pct:>3}%  X {money(codex.get('today_cost'))} {x_pct:>3}%  O {money(opencode.get('today_cost'))} {o_pct:>3}%",
+        split_gauge(float(claude.get('today_cost') or 0), float(codex.get('today_cost') or 0), gauge_width, palette),
+    ]
+    lines.extend(boxed("TODAY", hero_body, width, palette))
+
+    values = [float(row.get("total_cost") or 0) for row in daily]
+    week_total = sum(values)
+    average = week_total / len(values) if values else 0
+    peak = max(values) if values else 0
+    trend = sparkline(values, min(14, max(7, width // 8)))
+    lines.append("")
+    lines.append(row(palette.wrap("7-DAY BURN", palette.bold), f"total {money(week_total)}  avg {money(average)}  peak {money(peak)}", width))
+    lines.append(palette.wrap(trend, palette.codex if peak >= 100 else palette.claude))
+    chart_width = max(8, min(20, width - 44))
+    max_day = max(values) if values else 0
+    for item in daily[-5:]:
+        label = str(item.get("label") or "-")
+        total = float(item.get("total_cost") or 0)
+        c_value = float(item.get("claude_cost") or 0)
+        x_value = float(item.get("codex_cost") or 0)
+        o_value = float(item.get("opencode_cost") or 0)
+        lines.append(
+            f"{fit(label, 9)} {fit(money(total), 9, '>')} "
+            f"{bar(total, max_day, chart_width)} "
+            f"C {fit(money(c_value), 7, '>')} X {fit(money(x_value), 7, '>')} O {fit(money(o_value), 7, '>')}"
+        )
+
+    lines.append("")
+    lines.append(palette.wrap("HIGH-COST SESSIONS", palette.bold))
+    header = f"{fit('Cost', 9, '>')}  {fit('Tool', 6)} {fit('When', 11)} {fit('Model', max(8, width - 34))}"
+    lines.append(header[:width])
+    for item in sessions[:5]:
+        provider = str(item.get("provider") or "-").title()
+        provider_style = palette.claude if provider.lower() == "claude" else palette.codex if provider.lower() == "codex" else ""
+        line = (
+            f"{fit(money(item.get('cost')), 9, '>')}  "
+            f"{fit(palette.wrap(provider[:4], provider_style), 6)} "
+            f"{fit(str(item.get('when') or '-'), 11)} "
+            f"{trim(item.get('model') or '-', max(8, width - 34))}"
+        )
+        lines.append(line)
+    if not sessions:
+        lines.append("No paid sessions found.")
+
+    actionable = list(warnings[:3])
+    if actionable:
+        lines.append("")
+        lines.append(palette.wrap("SIGNALS", palette.bold))
+        for warning in actionable:
+            level = str(warning.get("level") or "warn").upper()
+            message = trim(warning.get("message") or "source unavailable", width - 8)
+            lines.append(f"{level:<6} {message}")
+    return "\n".join(trim(line, width) for line in lines) + "\n"
+
+
+def ascii_safe(text: str) -> str:
+    table = str.maketrans({
+        "█": "#",
+        "░": ".",
+        "▁": "_",
+        "▂": "_",
+        "▃": "-",
+        "▄": "-",
+        "▅": "=",
+        "▆": "=",
+        "▇": "#",
+        "╭": "+",
+        "╮": "+",
+        "╰": "+",
+        "╯": "+",
+        "│": "|",
+        "─": "-",
+        "━": "-",
+        "┏": "+",
+        "┓": "+",
+        "┗": "+",
+        "┛": "+",
+        "┃": "|",
+        "┌": "+",
+        "┐": "+",
+        "└": "+",
+        "┘": "+",
+        "├": "+",
+        "┤": "+",
+        "┬": "+",
+        "┴": "+",
+        "┼": "+",
+        "═": "=",
+        "║": "|",
+        "…": "...",
+    })
+    return text.translate(table)
+
+
+def rich_render(model: dict[str, Any], width: int, color_enabled: bool) -> str:
+    if not RICH_AVAILABLE:
+        return render(model, width, Palette(color_enabled))
+
+    buffer = io.StringIO()
+    console = Console(
+        file=buffer,
+        width=width,
+        force_terminal=color_enabled,
+        color_system="truecolor" if color_enabled else None,
+        no_color=not color_enabled,
+        soft_wrap=False,
+    )
+
+    totals = model.get("totals") or {}
+    providers = model.get("providers") or {}
+    claude = providers.get("claude") or {}
+    codex = providers.get("codex") or {}
+    opencode = providers.get("opencode") or {}
+    daily = model.get("daily") if isinstance(model.get("daily"), list) else []
+    sessions = model.get("sessions") if isinstance(model.get("sessions"), list) else []
+    monthly = model.get("monthly") if isinstance(model.get("monthly"), list) else []
+    warnings = model.get("warnings") if isinstance(model.get("warnings"), list) else []
+    cache = model.get("cache") if isinstance(model.get("cache"), dict) else {}
+    status = str(model.get("status") or "OK")
+    status_label = {"OK": "STEADY", "WARN": "WARM", "OVER": "HOT", "STALE": "STALE", "UNAVAILABLE": "PARTIAL"}.get(status, status)
+    status_style = "green" if status == "OK" else "yellow" if status in {"WARN", "OVER", "STALE"} else "red"
+    now = datetime.now().strftime("%a %m/%d %H:%M")
+    cache_state = str(cache.get("state") or "unknown")
+    cache_age = int(cache.get("age_seconds") or 0)
+    today_cost = float(totals.get("today_cost") or 0)
+    token_total = float(totals.get("tokens") or 0)
+    lifetime = float(totals.get("lifetime_cost") or 0)
+    claude_style = "#5e81ac"
+    codex_style = "#d08770"
+    opencode_style = "#b48ead"
+    status_ok = "#a3be8c"
+    status_warn = "#ebcb8b"
+    status_hot = "#bf616a"
+    border_dim = "#4c566a"
+    claude_today = float(claude.get("today_cost") or 0)
+    codex_today = float(codex.get("today_cost") or 0)
+    opencode_today = float(opencode.get("today_cost") or 0)
+    split_total = claude_today + codex_today + opencode_today
+    c_pct = pct(claude_today, split_total)
+    x_pct = pct(codex_today, split_total)
+    o_pct = max(0, 100 - c_pct - x_pct) if split_total > 0 else 0
+    primary_total = claude_today + codex_today
+    cp_pct = pct(claude_today, primary_total)
+    xp_pct = max(0, 100 - cp_pct) if primary_total > 0 else 0
+    openrouter_key = bool(os.environ.get("OPENROUTER_API_KEY"))
+    values = [float(row.get("total_cost") or 0) for row in daily]
+    week_total = sum(values)
+    average = week_total / len(values) if values else 0
+    peak = max(values) if values else 0
+    monthly_total = sum(float(m.get("total_cost") or 0) for m in monthly)
+
+    def rule(label: str = "") -> None:
+        console.rule(Text(label, style="bold dim") if label else "", style=border_dim)
+
+    def micro_bar(value: float, total: float, size: int = 18) -> str:
+        if total <= 0:
+            return "·" * size
+        fill = max(0, min(size, int(round((value / total) * size))))
+        return "█" * fill + "░" * (size - fill)
+
+    header = Table.grid(expand=True)
+    header.add_column(ratio=1)
+    header.add_column(justify="right")
+    header.add_row(Text("CCUSAGE OPS", style="bold #eceff4"), Text(f"{now}  cache:{cache_state}  age:{cache_age}s", style="dim"))
+    header.add_row(Text(f"today {money(today_cost)}  wk {money(week_total)}  mo {money(monthly_total)}", style="bold"), Text(status_label, style=f"bold {status_style}"))
+    console.print(header)
+    rule()
+
+    providers_table = Table.grid(expand=True)
+    providers_table.add_column(width=18)
+    providers_table.add_column(justify="right", width=11)
+    providers_table.add_column(justify="right", width=9)
+    providers_table.add_column(justify="right", width=11)
+    providers_table.add_column(ratio=1)
+    providers_table.add_row(Text("ROUTE", style="dim"), Text("TODAY", style="dim"), Text("SHARE", style="dim"), Text("TOKENS", style="dim"), Text("  LOAD", style="dim"))
+    provider_rows = [
+        ("claude/anthropic", claude_today, c_pct, claude.get("tokens") or 0, claude_style),
+        ("codex/openai", codex_today, x_pct, codex.get("tokens") or 0, codex_style),
+        ("opencode", opencode_today, o_pct, opencode.get("tokens") or 0, opencode_style),
+    ]
+    max_provider = max([row[1] for row in provider_rows] + [0])
+    for name, amount, share, toks, style in provider_rows:
+        providers_table.add_row(
+            Text(name, style=f"bold {style}"),
+            Text(money(amount), style="bold"),
+            Text(f"{share}%", style="dim"),
+            Text(number(toks), style="dim"),
+            Text(f"  {micro_bar(float(amount), max_provider, 20)}", style=style if amount else "dim"),
+        )
+    providers_table.add_row(Text("openrouter", style="dim"), Text("$0.00", style="dim"), Text("0%", style="dim"), Text("--", style="dim"), Text("  key ready" if openrouter_key else "  set OPENROUTER_API_KEY", style=opencode_style if openrouter_key else "dim"))
+    console.print(providers_table)
+    rule("BURN")
+
+    spark = rich_spark(values)
+    burn_line = Text.assemble(("7d ", "dim"), (f"total {money(week_total)}  avg {money(average)}  peak {money(peak)}  ", "bold"))
+    burn_line.append(spark)
+    console.print(burn_line)
+    max_day = max(values) if values else 0
+    for item in daily[-7:]:
+        total = float(item.get("total_cost") or 0)
+        style = status_hot if total == max_day and total > 0 else "#eceff4"
+        console.print(Text.assemble(
+            (f"{str(item.get('label') or '-'):10}", "dim"),
+            (f"{money(total):>9}  ", f"bold {style}"),
+            (micro_bar(total, max_day, min(28, max(14, width // 5))), style),
+            (f"  C {money(item.get('claude_cost') or 0):>8}", claude_style),
+            (f"  X {money(item.get('codex_cost') or 0):>8}", codex_style),
+            (f"  O {money(item.get('opencode_cost') or 0):>8}", opencode_style),
+        ))
+    rule("SESSIONS")
+
+    if sessions:
+        session_table = Table.grid(expand=True)
+        session_table.add_column(justify="right", width=10)
+        session_table.add_column(width=4)
+        session_table.add_column(width=12)
+        session_table.add_column(ratio=1)
+        session_table.add_column(justify="right", width=8)
+        for item in sessions[:7]:
+            provider = str(item.get("provider") or "-").lower()
+            ps = claude_style if provider == "claude" else codex_style if provider == "codex" else opencode_style
+            p = {"claude": "C", "codex": "X", "opencode": "O"}.get(provider, provider[:1].upper())
+            session_table.add_row(
+                Text(money(item.get("cost")), style="bold"),
+                Text(f" {p} ", style=f"bold {ps}"),
+                Text(str(item.get("when") or "-"), style="dim"),
+                Text(trim(item.get("model") or "-", max(12, width - 40))),
+                Text(number(item.get("tokens") or 0), style="dim"),
+            )
+        console.print(session_table)
+    else:
+        console.print(Text("paid session rows not present in source", style="dim"))
+
+    if warnings:
+        rule("SOURCE SIGNALS")
+        for w in warnings[:4]:
+            level = str(w.get("level") or "warn").upper()
+            console.print(Text.assemble((f"{level:<7}", f"bold {status_hot}"), (trim(w.get("message") or "", max(20, width - 9)), "dim")))
+    return buffer.getvalue()
+
+
+def main() -> int:
+    args = parse_args()
+    width = terminal_width(args.width)
+    color_enabled = use_color(args)
+    if args.format == "json":
+        color_enabled = False
+    palette = Palette(color_enabled)
+    if args.input:
+        sources, warnings = load_fixture(args.input)
+    else:
+        sources, warnings = load_live_sources(args.refresh, args.no_cache)
+    model = normalize(sources, warnings)
+    if args.format == "json":
+        print(json.dumps(model, indent=2, sort_keys=True))
+        return 0
+    if args.format == "plain":
+        sys.stdout.write(ascii_safe(rich_render(model, width, False)))
+    else:
+        sys.stdout.write(rich_render(model, width, color_enabled))
+    return 0
+
+
+raise SystemExit(main())
+PY

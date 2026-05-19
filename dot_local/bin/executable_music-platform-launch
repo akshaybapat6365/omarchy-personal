@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+class="org.omarchy.music-platform"
+title="Music"
+command="/home/akshaybapat/.local/bin/music-platform"
+
+address="$(
+  hyprctl clients -j |
+    jq -r --arg class "$class" '.[] | select(.class == $class) | .address' |
+    head -n 1
+)"
+
+if [[ -n "$address" ]]; then
+  workspace="$(hyprctl activeworkspace -j | jq -r '.id')"
+  hyprctl dispatch movetoworkspacesilent "$workspace,address:$address" >/dev/null 2>&1 || true
+  hyprctl dispatch focuswindow "address:$address" >/dev/null 2>&1 || true
+  hyprctl dispatch centerwindow >/dev/null 2>&1 || true
+  exit 0
+fi
+
+exec alacritty --class "$class" --title "$title" -e "$command"

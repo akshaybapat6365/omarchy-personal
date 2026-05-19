@@ -1,0 +1,25 @@
+# metapac group: system
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+btrfs-progs = "*"
+cups = "*"
+cups-browsed = "*"
+cups-filters = "*"
+cups-pdf = "*"
+dosfstools = "*"
+efibootmgr = "*"
+exfatprogs = "*"
+gnome-keyring = "*"
+iwd = "*"
+limine = "*"
+limine-snapper-sync = "*"
+power-profiles-daemon = "*"
+sddm = "*"
+tailscale = "*"
+thermald = "*"
+ufw = "*"
+
+[arch-paru]
+mullvad-vpn-bin = "*"
+mullvad-vpn-daemon-bin = "*"

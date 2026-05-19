@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Waybar custom module: today's Claude Code token spend (via ccusage)
+set -euo pipefail
+
+export PATH="$HOME/.local/share/mise/installs/node/25.9.0/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+CCUSAGE_BIN=$(command -v ccusage || true)
+TODAY=$(date +%Y-%m-%d)
+
+if [[ -z "$CCUSAGE_BIN" ]]; then
+  jq -cn --arg text "󰪸 $0" --arg tooltip "Claude usage unavailable: ccusage not found in Waybar PATH" --arg class "hot" '{text: $text, tooltip: $tooltip, class: $class}'
+  exit 0
+fi
+
+CLAUDE_DATA=$("$CCUSAGE_BIN" claude daily --json 2>/dev/null || printf '{}')
+CLAUDE_TODAY=$(printf '%s' "$CLAUDE_DATA" | jq -r --arg today "$TODAY" '([.daily[]? | select((.date // .period) == $today) | (.totalCost // .costUSD // 0)] | add) // 0' 2>/dev/null)
+CLAUDE_TOTAL=$(printf '%s' "$CLAUDE_DATA" | jq -r '(.totals.totalCost // .totals.costUSD // 0)' 2>/dev/null)
+CLAUDE_TOKENS=$(printf '%s' "$CLAUDE_DATA" | jq -r --arg today "$TODAY" '([.daily[]? | select((.date // .period) == $today) | (.totalTokens // 0)] | add) // 0' 2>/dev/null)
+
+CLAUDE_TODAY=${CLAUDE_TODAY:-0}
+CLAUDE_TOTAL=${CLAUDE_TOTAL:-0}
+CLAUDE_TOKENS=${CLAUDE_TOKENS:-0}
+
+TODAY_FMT=$(printf "%.2f" "$CLAUDE_TODAY")
+TOTAL_FMT=$(printf "%.2f" "$CLAUDE_TOTAL")
+CLAUDE_TODAY_FMT=$(printf "%.2f" "$CLAUDE_TODAY")
+CLAUDE_TOTAL_FMT=$(printf "%.2f" "$CLAUDE_TOTAL")
+TOKENS_FMT=$(awk -v n="$CLAUDE_TOKENS" 'BEGIN { if (n >= 1000000000) printf "%.1fB", n/1000000000; else if (n >= 1000000) printf "%.1fM", n/1000000; else if (n >= 1000) printf "%.0fk", n/1000; else printf "%d", n }')
+
+CLASS="quiet"
+awk "BEGIN { exit !($CLAUDE_TODAY > 5)  }" && CLASS="warm"
+awk "BEGIN { exit !($CLAUDE_TODAY > 15) }" && CLASS="hot"
+
+jq -cn \
+  --arg text "󰪸 \$${TODAY_FMT}" \
+  --arg tooltip "$(printf 'Claude today: $%s\nTokens: %s\nAll-time Claude: $%s\n\nClick to open AI spend dashboard' "$CLAUDE_TODAY_FMT" "$TOKENS_FMT" "$CLAUDE_TOTAL_FMT")" \
+  --arg class "$CLASS" \
+  '{text: $text, tooltip: $tooltip, class: $class}'

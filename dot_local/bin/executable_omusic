@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$HOME/code/omarchy-music"
+cd "$ROOT"
+exec uv run omusic "$@"

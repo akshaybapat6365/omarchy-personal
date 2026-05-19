@@ -1,0 +1,23 @@
+# Extra autostart processes for the AI engineering workflow
+
+# Load Hyprland plugins (hyprexpo for overview, hyprwinwrap for desktop widget)
+# then re-parse config so the `hyprexpo:expo` dispatcher and `plugin{hyprexpo{}}`
+# keywords (gesture_distance, columns, etc.) are recognized — without this,
+# every login surfaces "Invalid dispatcher hyprexpo:expo" and "Invalid value
+# 220 for finger count" errors, AND the 3-finger up/down expo gestures register
+# as no-ops which can shadow the 3-finger horizontal workspace swipe.
+exec-once = sh -c 'hyprpm reload && hyprctl reload'
+
+# Pre-warm AI scratchpad sessions. The `|| bash` fallback keeps the tmux session
+# alive even if the AI CLI exits (auth/setup issues), so summoning the scratchpad
+# always lands in a usable shell instead of an empty workspace.
+exec-once = bash -c 'tmux new-session -d -s claude   "claude   || bash" 2>/dev/null || true'
+exec-once = bash -c 'tmux new-session -d -s codex    "codex    || bash" 2>/dev/null || true'
+exec-once = bash -c 'tmux new-session -d -s opencode "opencode || bash" 2>/dev/null || true'
+
+# Fusuma is managed by the user systemd service at
+# ~/.config/systemd/user/fusuma.service so it does not double-start.
+
+# Desktop widget — alacritty pinned to the desktop layer via hyprwinwrap.
+# Shows clock, weather, system stats, AI spend, workspace legend behind windows.
+exec-once = alacritty --class omarchy-widget --title omarchy-widget -o "window.opacity=0.0" -o "window.padding.x=20" -o "window.padding.y=20" -o "font.size=14" -o "window.decorations=None" -e omarchy-widget

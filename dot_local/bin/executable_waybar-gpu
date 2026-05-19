@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Waybar custom module: NVIDIA GPU temp + utilization
+read -r TEMP UTIL MEM_USED MEM_TOTAL POWER < <(
+  nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw \
+    --format=csv,noheader,nounits 2>/dev/null | tr ',' ' '
+)
+[[ -z "$TEMP" ]] && { echo '{"text":""}'; exit 0; }
+CLASS="cool"; (( TEMP >= 70 )) && CLASS="warm"; (( TEMP >= 85 )) && CLASS="hot"
+printf '{"text":"󰢮 %s° %s%%","tooltip":"GPU\\nTemp: %s°C\\nUtil: %s%%\\nVRAM: %s / %s MiB\\nPower: %s W","class":"%s"}\n' \
+  "$TEMP" "$UTIL" "$TEMP" "$UTIL" "$MEM_USED" "$MEM_TOTAL" "$POWER" "$CLASS"

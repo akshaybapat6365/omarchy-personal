@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+inhibitor_pid=""
+
+cleanup() {
+  if [[ -n "${inhibitor_pid:-}" ]] && kill -0 "$inhibitor_pid" 2>/dev/null; then
+    kill "$inhibitor_pid" 2>/dev/null || true
+    wait "$inhibitor_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+external_power_online() {
+  local supply type online
+  for supply in /sys/class/power_supply/*; do
+    [[ -d "$supply" && -r "$supply/type" && -r "$supply/online" ]] || continue
+    type="$(<"$supply/type")"
+    online="$(<"$supply/online")"
+    case "$type" in
+      Mains|USB|USB_C|USB_PD)
+        [[ "$online" == "1" ]] && return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+start_inhibitor() {
+  if [[ -n "${inhibitor_pid:-}" ]] && kill -0 "$inhibitor_pid" 2>/dev/null; then
+    return
+  fi
+  systemd-inhibit \
+    --who="omarchy-ac-power" \
+    --why="AC power is connected; keep Omarchy awake and only lock the session" \
+    --what=sleep:idle:handle-lid-switch \
+    --mode=block \
+    sleep infinity &
+  inhibitor_pid="$!"
+}
+
+stop_inhibitor() {
+  cleanup
+  inhibitor_pid=""
+}
+
+while true; do
+  if external_power_online; then
+    start_inhibitor
+  else
+    stop_inhibitor
+  fi
+  sleep 15
+done

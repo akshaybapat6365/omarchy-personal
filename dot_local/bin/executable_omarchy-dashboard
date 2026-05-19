@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Toggleable fullscreen dashboard — same alacritty-transparency pattern as the cheatsheet.
+# Bigger, richer info than the small desktop widget.
+
+set -euo pipefail
+TITLE="OmarchyDashboardOverlay"
+SCRIPT="$HOME/.local/share/omarchy/dashboard.sh"
+
+[[ -f "$SCRIPT" ]] || { notify-send "Dashboard" "Missing: $SCRIPT"; exit 1; }
+
+if pgrep -af "alacritty.*$TITLE" >/dev/null 2>&1; then
+  pkill -f "alacritty.*$TITLE" 2>/dev/null || true
+  exit 0
+fi
+
+setsid alacritty \
+  --class "$TITLE" --title "$TITLE" \
+  -o "window.opacity=0.30" \
+  -o "window.decorations=None" \
+  -o "window.padding.x=80" \
+  -o "window.padding.y=60" \
+  -o "font.size=16" \
+  -e bash -c "$SCRIPT; read -rsn1" \
+  >/dev/null 2>&1 &

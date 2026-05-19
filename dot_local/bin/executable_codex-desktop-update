@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec "${HOME}/.local/opt/codex-desktop-linux/bin/codex-desktop-update" "$@"

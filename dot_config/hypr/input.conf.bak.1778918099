@@ -1,0 +1,106 @@
+# Control your input devices
+# See https://wiki.hypr.land/Configuring/Variables/#input
+input {
+  kb_layout = us
+  kb_options = compose:caps
+
+  repeat_rate = 40
+  repeat_delay = 250
+
+  numlock_by_default = true
+  sensitivity = 0.15
+  accel_profile = adaptive
+
+  # SYSTEM-WIDE smooth scroll: don't down-convert hi-res scroll events to
+  # discrete wheel ticks for clients. Default is 1 (emulate for non-standard
+  # events) which produces the stair-step feel across every app. With 0,
+  # Hyprland forwards REL_WHEEL_HI_RES → wl_pointer.axis_value120 untouched,
+  # so GTK / Qt / Chromium / Firefox / Electron all get smooth events.
+  emulate_discrete_scroll = 0
+
+  touchpad {
+    # macOS-style natural (inverse) scrolling
+    natural_scroll = true
+
+    # Tap/click behavior: 1 finger = left, 2 = right, 3 = middle.
+    tap-to-click = true
+    tap-and-drag = true
+    drag_lock = 1
+    clickfinger_behavior = true
+    tap_button_map = lrm
+
+    # 3-finger drag disabled: ELAN 04F3:311C on this XPS 17 doesn't expose
+    # GESTURE_HOLD reliably, so it never fires. 3 fingers stay free for swipes.
+    drag_3fg = 0
+
+    # Mac-like scroll feel (default 1.0; lower = slower per finger-mm)
+    scroll_factor = 0.2
+
+    # Off so 2-finger tap (right-click) isn't swallowed right after typing
+    disable_while_typing = false
+  }
+}
+
+# Scroll nicely in the terminal
+windowrule = match:class (Alacritty|kitty|foot), scroll_touchpad 1.0
+windowrule = match:class com.mitchellh.ghostty, scroll_touchpad 1.0
+
+gestures {
+  workspace_swipe_distance = 250
+  workspace_swipe_cancel_ratio = 0.35
+  workspace_swipe_min_speed_to_force = 12
+  workspace_swipe_create_new = false
+  workspace_swipe_direction_lock = true
+  workspace_swipe_direction_lock_threshold = 8
+  # Slide across all workspaces in one continuous swipe
+  workspace_swipe_forever = true
+}
+
+# ---- Trackpad gestures (Linear navigation, § E 2026-05-05) ----
+# 3-finger horizontal = continuous workspace_swipe through 1..9 in order.
+# `workspace_swipe_forever = true` (above) lets one motion cross multiple ws.
+# `workspace_swipe_create_new = false` (above) prevents auto-creating ws 10.
+#
+# Reverted from the 4-direction discrete grid model — user mental model is
+# linear, not 3x3. The "doesn't go through all of them" complaint was the
+# grid wrapping within row (3 -> 1, never crosses to row 2). Continuous
+# workspace gesture walks 1<->2<->3<->...<->9 in numeric order.
+gesture = 3, horizontal, workspace
+
+# 3-finger up = macOS Mission Control via shared wrapper. Falls back to
+# walker (Launchpad-like) when hyprexpo isn't loaded.
+gesture = 3, up,   dispatcher, exec, /home/akshaybapat/.local/bin/macos-overview up
+
+# 3-finger down = macOS-style dismiss. If overview is open, swipe-down
+# returns to the focused window (matches macOS behavior). Otherwise
+# toggles the scratchpad special workspace as App Exposé approximation.
+gesture = 3, down, dispatcher, exec, /home/akshaybapat/.local/bin/macos-overview down
+
+# ---- 4-finger gestures: window+workspace manipulation ----
+# 4-finger up routes through the same wrapper so state file stays
+# authoritative across all overview-toggling gesture paths.
+gesture = 4, up,   dispatcher, exec, /home/akshaybapat/.local/bin/macos-overview up
+
+# 4-finger down = toggle waybar (immersive / Hide Menu Bar style).
+gesture = 4, down, dispatcher, exec, omarchy-toggle-waybar
+
+# 4-finger horizontal = drag active window to prev/next workspace, focus follows.
+# macOS-style "fling window to next desktop." `r±1` clamps at ws 1 / ws 10
+# without creating new workspaces.
+gesture = 4, left,  dispatcher, movetoworkspace, r-1
+gesture = 4, right, dispatcher, movetoworkspace, r+1
+
+# 4-finger pinch = launcher / new empty workspace (existing).
+gesture = 4, pinchin, dispatcher, exec, omarchy-launch-walker
+gesture = 4, pinchout, dispatcher, workspace, empty
+
+# 3-finger pinch-out = omarchy system menu (settings/power/themes).
+# Pinch-in intentionally unused — too easy to misfire on a destructive action
+# during a 3-finger horizontal swipe.
+gesture = 3, pinchout, dispatcher, exec, omarchy-menu
+
+# 5-finger any-direction swipe → walker (newm signature). Verify ELAN
+# emits 5-finger events with `libinput debug-events`; if not, comment out.
+gesture = 5, swipe, dispatcher, exec, omarchy-launch-walker
+
+# Two-finger scroll and app-native two-finger pinch are left to libinput/apps.

@@ -1,0 +1,36 @@
+matches:
+  - trigger: ":email"
+    replace: "akshaybapat6365@gmail.com"
+
+  - trigger: ":date"
+    replace: "{{mydate}}"
+    vars:
+      - name: mydate
+        type: date
+        params:
+          format: "%Y-%m-%d"
+
+  - trigger: ":time"
+    replace: "{{mytime}}"
+    vars:
+      - name: mytime
+        type: date
+        params:
+          format: "%H:%M"
+
+  - trigger: ":now"
+    replace: "{{mynow}}"
+    vars:
+      - name: mynow
+        type: date
+        params:
+          format: "%Y-%m-%d %H:%M"
+
+  - trigger: ":sig"
+    replace: "—\nAkshay Bapat\nakshaybapat6365@gmail.com"
+
+  - trigger: ":shrug"
+    replace: "¯\\_(ツ)_/¯"
+
+  - trigger: ":lod"
+    replace: "ಠ_ಠ"

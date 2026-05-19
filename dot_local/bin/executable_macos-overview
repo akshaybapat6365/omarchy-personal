@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# macos-overview — macOS-style 3-finger up/down gesture handler.
+#
+# Usage:  macos-overview up | macos-overview down
+#
+# up:   toggle Mission Control (hyprexpo overview). Falls back to walker
+#       (Launchpad-like grid) when hyprexpo isn't loaded.
+# down: if overview is open, dismiss it (macOS swipe-down-to-return).
+#       Otherwise toggle scratchpad (App Exposé approximation).
+#
+# Bound from:
+#   ~/.config/hypr/input.conf   gesture = 3, up   -> macos-overview up
+#                               gesture = 3, down -> macos-overview down
+#                               gesture = 4, up   -> macos-overview up
+#
+# State lives in /tmp/mc-overview-state. The hyprexpo dispatcher exposes
+# `on`/`off`/`toggle`; `on`/`off` are idempotent at the plugin level so
+# even if our state drifts (e.g. someone toggles via keybind that bypasses
+# this wrapper), one gesture re-syncs everything.
+#
+# Instrumentation: appends to /tmp/desktop-debug.log on every invocation.
+
+set -uo pipefail
+LOG=/tmp/desktop-debug.log
+STATE=/tmp/mc-overview-state
+ts() { date +'%H:%M:%S.%3N'; }
+log() { printf '[%s] macos-overview %s\n' "$(ts)" "$*" >> "$LOG"; }
+
+dir="${1:-up}"
+log "START pid=$$ dir=$dir"
+
+# Plugin not loaded: graceful fallbacks so the gesture still does something.
+if ! hyprctl plugin list 2>/dev/null | grep -q hyprexpo; then
+    case "$dir" in
+        up)
+            log "hyprexpo absent on UP -> walker (launchpad-like)"
+            exec omarchy-launch-walker
+            ;;
+        down)
+            log "hyprexpo absent on DOWN -> scratchpad"
+            exec hyprctl dispatch togglespecialworkspace scratchpad
+            ;;
+    esac
+fi
+
+state=$(cat "$STATE" 2>/dev/null || echo "CLOSED")
+log "current state=$state"
+
+case "$dir" in
+    up)
+        if [ "$state" = "OPEN" ]; then
+            log "UP from OPEN -> dispatch off (toggle back to focused)"
+            out=$(hyprctl dispatch hyprexpo:expo off 2>&1)
+            rc=$?
+            log "rc=$rc out='$out'"
+            [ "$rc" -eq 0 ] && echo CLOSED > "$STATE"
+        else
+            log "UP from CLOSED -> dispatch on (open overview)"
+            out=$(hyprctl dispatch hyprexpo:expo on 2>&1)
+            rc=$?
+            log "rc=$rc out='$out'"
+            [ "$rc" -eq 0 ] && echo OPEN > "$STATE"
+        fi
+        ;;
+    down)
+        if [ "$state" = "OPEN" ]; then
+            log "DOWN from OPEN -> dismiss overview (macOS-style return)"
+            out=$(hyprctl dispatch hyprexpo:expo off 2>&1)
+            rc=$?
+            log "rc=$rc out='$out'"
+            [ "$rc" -eq 0 ] && echo CLOSED > "$STATE"
+        else
+            log "DOWN from CLOSED -> togglespecialworkspace scratchpad"
+            out=$(hyprctl dispatch togglespecialworkspace scratchpad 2>&1)
+            rc=$?
+            log "rc=$rc out='$out'"
+        fi
+        ;;
+    *)
+        log "ERROR: unknown dir=$dir (expected up|down)"
+        exit 2
+        ;;
+esac
+
+log "END"

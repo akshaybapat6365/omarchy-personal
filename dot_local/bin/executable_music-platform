@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+mpd_socket="${MPD_HOST:-/home/akshaybapat/.local/state/mpd/socket}"
+export MPD_HOST="$mpd_socket"
+export PATH="/home/akshaybapat/.local/bin:$PATH"
+log_file="/home/akshaybapat/.local/state/music-platform.log"
+mkdir -p "${log_file%/*}"
+exec 2>>"$log_file"
+
+mpc_cmd() {
+  MPD_HOST="$mpd_socket" mpc "$@"
+}
+
+cleanup() {
+  local code=$?
+  trap - EXIT HUP INT TERM
+  mpc_cmd stop >/dev/null 2>&1 || true
+  exit "$code"
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+fit() {
+  local max="$1"
+  local text="${2//$'\n'/ }"
+  if ((${#text} > max)); then
+    printf '%s...' "${text:0:max-3}"
+  else
+    printf '%s' "$text"
+  fi
+}
+
+draw() {
+  local cols current status volume queue_line
+  cols="$(tput cols 2>/dev/null || printf 80)"
+  current="$(mpc_cmd current -f '%artist% - %title%' 2>/dev/null || true)"
+  status="$(mpc_cmd status 2>/dev/null || true)"
+
+  clear
+  printf 'Music\n'
+  printf '=====\n\n'
+
+  if [[ -n "$current" ]]; then
+    printf 'Now: %s\n' "$(fit "$((cols - 5))" "$current")"
+  else
+    printf 'Now: Nothing playing\n'
+  fi
+
+  printf '%s\n\n' "$status"
+
+  printf 'Keys: / search+play | a search+queue | Space play/pause | n next | b prev | s stop | c clear | + - volume | o player | v visualizer | q quit\n\n'
+
+  printf 'Queue\n'
+  printf '%s\n' '-----'
+  if ! mpc_cmd playlist -f '%position%. %artist% - %title%' 2>/dev/null | sed -n '1,12p'; then
+    true
+  fi
+}
+
+run_search() {
+  local mode="$1"
+  clear
+  if [[ "$mode" == "queue" ]]; then
+    music-search-stream --queue || true
+  else
+    music-search-stream || true
+  fi
+  printf '\nReturning to Music...'
+  sleep 1
+}
+
+systemctl --user start mpd.service >/dev/null 2>&1 || true
+
+while true; do
+  draw
+  key=""
+  IFS= read -rsn1 -t 1 key || true
+  case "$key" in
+    /)
+      run_search play
+      ;;
+    a)
+      run_search queue
+      ;;
+    ' ')
+      mpc_cmd toggle >/dev/null 2>&1 || true
+      ;;
+    n)
+      mpc_cmd next >/dev/null 2>&1 || true
+      ;;
+    b|p)
+      mpc_cmd prev >/dev/null 2>&1 || true
+      ;;
+    s)
+      mpc_cmd stop >/dev/null 2>&1 || true
+      ;;
+    c)
+      mpc_cmd clear >/dev/null 2>&1 || true
+      ;;
+    +|=)
+      mpc_cmd volume +5 >/dev/null 2>&1 || true
+      ;;
+    -|_)
+      mpc_cmd volume -5 >/dev/null 2>&1 || true
+      ;;
+    o)
+      ncmpcpp --config /home/akshaybapat/.config/ncmpcpp/config || true
+      ;;
+    v)
+      ncmpcpp --config /home/akshaybapat/.config/ncmpcpp/config --screen visualizer || true
+      ;;
+    q|Q)
+      clear
+      exit 0
+      ;;
+  esac
+done

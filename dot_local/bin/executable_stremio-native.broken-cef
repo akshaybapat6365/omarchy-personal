@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$HOME/.local/opt/stremio-native"
+CERT_FILE="$HOME/.stremio-server/httpsCert.json"
+IP_ADDR="127.0.0.1"
+LOG_DIR="$HOME/.cache/stremio"
+LOG_FILE="$LOG_DIR/stremio-native.log"
+
+mkdir -p "$LOG_DIR"
+# GUI launchers and agent-run terminals may close stdout/stderr; the bundled Node server
+# logs heavily and can crash with EPIPE if it inherits a broken pipe.
+if [[ -z "${STREMIO_DEBUG_STDIO:-}" ]]; then
+  if [[ -f "$LOG_FILE" && $(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0) -gt 5242880 ]]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+  fi
+  exec >>"$LOG_FILE" 2>&1
+fi
+
+export LD_LIBRARY_PATH="$APP_DIR/cef${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Stremio Web needs the secure local torrent service on 12470. The native bundle binds it to 127.0.0.1.
+unset NO_HTTPS_SERVER
+# Official beta uses winit/CEF; XWayland avoids Hyprland Wayland ANR/rendering issues seen with the default backend.
+export WINIT_UNIX_BACKEND="${WINIT_UNIX_BACKEND:-x11}"
+export GDK_BACKEND="${GDK_BACKEND:-x11}"
+
+ensure_cert_and_print_domain() {
+  python3 - "$CERT_FILE" "$IP_ADDR" <<'PY'
+import base64, datetime as dt, json, os, sys, urllib.request
+cert_file, ip_addr = sys.argv[1], sys.argv[2]
+
+def parse_time(s):
+    return dt.datetime.fromisoformat(s.replace('Z', '+00:00'))
+
+def valid_existing():
+    try:
+        with open(cert_file) as f:
+            data = json.load(f)
+        not_after = parse_time(data['notAfter'])
+        if not_after > dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=7):
+            return data
+    except Exception:
+        return None
+    return None
+
+data = valid_existing()
+if data is None:
+    os.makedirs(os.path.dirname(cert_file), exist_ok=True)
+    body = json.dumps({'ipAddress': ip_addr, 'authKey': None}).encode()
+    req = urllib.request.Request(
+        'https://api.strem.io/api/certificateGet',
+        data=body,
+        headers={'Content-Type': 'application/json'},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode('utf-8'))
+    cert_resp = json.loads(payload['result']['certificate'])
+    common = cert_resp['commonName']
+    contents = cert_resp['contents']
+    data = {
+        'domain': ip_addr.replace('.', '-') + common.replace('*', ''),
+        'key': base64.b64decode(contents['PrivateKey']).decode('ascii'),
+        'cert': base64.b64decode(contents['Certificate']).decode('ascii'),
+        'notBefore': contents['NotBefore'],
+        'notAfter': contents['NotAfter'],
+    }
+    tmp = cert_file + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f)
+    os.replace(tmp, cert_file)
+print(data['domain'])
+PY
+}
+
+CERT_DOMAIN="$(ensure_cert_and_print_domain)"
+WEB_URL="$(python3 - "$CERT_DOMAIN" <<'PY'
+from urllib.parse import quote
+import sys
+server = f"https://{sys.argv[1]}:12470"
+print('https://web.stremio.com/?streamingServer=' + quote(server, safe=''))
+PY
+)"
+
+args=(--url "$WEB_URL")
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    stremio://*) args+=(--open "$1"); shift ;;
+    -o|--open) args+=("$1" "${2:-}"); shift 2 || true ;;
+    *) args+=("$@") ; set -- ;;
+  esac
+fi
+
+exec "$APP_DIR/stremio" "${args[@]}"

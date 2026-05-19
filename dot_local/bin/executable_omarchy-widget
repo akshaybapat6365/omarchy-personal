@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Background dashboard widget. Runs in alacritty pinned to the desktop layer
+# via hyprwinwrap, so it shows behind windows whenever the screen is empty.
+
+GOLD='\033[38;2;191;167;93m'
+HI='\033[38;2;255;212;128m'
+CREAM='\033[38;2;235;219;178m'
+DIM='\033[38;2;120;110;90m'
+WHITE='\033[38;2;255;255;255m'
+RESET='\033[0m'
+BOLD='\033[1m'
+
+while true; do
+  clear
+
+  # Big clock — anchored top-left of widget
+  printf "\n  ${BOLD}${HI}%s${RESET}\n"  "$(date '+%H:%M')"
+  printf "  ${CREAM}%s${RESET}\n\n" "$(date '+%A · %B %d')"
+
+  # Weather (one liner, 2s timeout to not block)
+  W=$(curl -s --max-time 2 "wttr.in/?format=%c%20%t%20%C" 2>/dev/null | head -1)
+  if [[ -n "$W" && "$W" != *"unknown"* ]]; then
+    printf "  ${CREAM}%s${RESET}\n\n" "$W"
+  fi
+
+  # System
+  CPU=$(top -bn1 2>/dev/null | awk '/^%Cpu/{printf "%d", 100-$8}')
+  GPU=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null)
+  MEM=$(free -h 2>/dev/null | awk '/^Mem:/{print $3" / "$2}')
+  BAT_FILE=$(echo /sys/class/power_supply/BAT*/capacity)
+  BAT=$(cat $BAT_FILE 2>/dev/null | head -1)
+  STATUS_FILE=$(echo /sys/class/power_supply/BAT*/status)
+  CHARGE=$(cat $STATUS_FILE 2>/dev/null | head -1)
+
+  printf "  ${DIM}─── system ───${RESET}\n"
+  [[ -n "$CPU" ]] && printf "  ${CREAM}cpu   %s%%${RESET}\n" "$CPU"
+  [[ -n "$GPU" ]] && printf "  ${CREAM}gpu   %s°C${RESET}\n" "$GPU"
+  [[ -n "$MEM" ]] && printf "  ${CREAM}ram   %s${RESET}\n" "$MEM"
+  [[ -n "$BAT" ]] && printf "  ${CREAM}bat   %s%%  ${DIM}(%s)${RESET}\n" "$BAT" "${CHARGE:-?}"
+  printf "\n"
+
+  # AI spend today
+  TODAY=$(date +%Y-%m-%d)
+  if command -v ccusage >/dev/null 2>&1; then
+    USAGE=$(ccusage daily --json 2>/dev/null | jq -r ".daily[] | select(.date==\"$TODAY\") | .totalCost // 0" 2>/dev/null)
+    TOTAL=$(ccusage daily --json 2>/dev/null | jq -r '.totals.totalCost // 0' 2>/dev/null)
+    printf "  ${DIM}─── ai today ───${RESET}\n"
+    printf "  ${HI}\$%-6.2f${DIM}  total \$%.2f${RESET}\n\n" "${USAGE:-0}" "${TOTAL:-0}"
+  fi
+
+  # Workspace legend
+  printf "  ${DIM}─── workspaces ───${RESET}\n"
+  printf "  ${CREAM}1${DIM}·${CREAM}browser  ${CREAM}2${DIM}·${CREAM}code  ${CREAM}3${DIM}·${CREAM}ai${RESET}\n"
+  printf "  ${CREAM}4${DIM}·${CREAM}chat     ${CREAM}5${DIM}·${CREAM}media${RESET}\n\n"
+
+  # AI scratchpads tip
+  printf "  ${DIM}super+\\\\${RESET}    ${CREAM}claude scratchpad${RESET}\n"
+  printf "  ${DIM}super+.${RESET}     ${CREAM}quick /ask${RESET}\n"
+  printf "  ${DIM}super+sh+k${RESET}  ${CREAM}keybinds${RESET}\n"
+
+  sleep 60
+done

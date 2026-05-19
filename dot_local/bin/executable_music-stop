@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mpd_socket="${MPD_HOST:-/home/akshaybapat/.local/state/mpd/socket}"
+state_dir="$HOME/.local/state/music-ui"
+tui_addr_file="$state_dir/tui_address"
+ytm_pid_file="$HOME/.config/ytm-player/ytm.pid"
+
+find_tui_window_addresses() {
+  hyprctl clients -j 2>/dev/null \
+    | jq -r '.[] | select(.class == "org.omarchy.music-tui" or .class == "org.omarchy.music" or (.class == "com.mitchellh.ghostty" and (.title == "ytm" or .title == "bash"))) | .address' \
+    2>/dev/null
+}
+
+MPD_HOST="$mpd_socket" mpc stop >/dev/null 2>&1 || true
+
+if [[ -f "$tui_addr_file" ]]; then
+  tui_addr="$(head -n 1 "$tui_addr_file")"
+  if [[ -n "$tui_addr" ]]; then
+    hyprctl dispatch closewindow "address:$tui_addr" >/dev/null 2>&1 || true
+  fi
+  rm -f "$tui_addr_file"
+fi
+
+if [[ -f "$ytm_pid_file" ]] || command -v hyprctl >/dev/null 2>&1; then
+  while read -r addr; do
+    [[ -n "$addr" ]] || continue
+    hyprctl dispatch closewindow "address:$addr" >/dev/null 2>&1 || true
+  done < <(find_tui_window_addresses)
+  rm -f "$ytm_pid_file"
+fi
+
+pkill -TERM -u "$USER" -f '(^|/)(youtube-music)( |$)|appimage_extracted_.*/youtube-music|pear-desktop|youtube-music-cli|ytm-player|ytui_music|ytermusic|rmpc|cava|mpv|omusic-tui|uv run omusic|/omusic( |$)' 2>/dev/null || true
+sleep 0.5
+pkill -KILL -u "$USER" -f '(^|/)(youtube-music)( |$)|appimage_extracted_.*/youtube-music|pear-desktop|youtube-music-cli|ytm-player|ytui_music|ytermusic|rmpc|cava|mpv|omusic-tui|uv run omusic|/omusic( |$)' 2>/dev/null || true

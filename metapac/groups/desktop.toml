@@ -1,0 +1,14 @@
+# metapac group: desktop
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+1password-beta = "*"
+1password-cli = "*"
+aether = "*"
+chromium = "*"
+evince = "*"
+
+[arch-paru]
+brave-origin-beta-bin = "*"
+freetube-bin = "*"
+hidamari = "*"

@@ -1,0 +1,154 @@
+@import "../omarchy/current/theme/waybar.css";
+
+* {
+  background-color: @background;
+  color: @foreground;
+
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+  font-family: 'JetBrainsMono Nerd Font';
+  font-size: 12px;
+}
+
+.modules-left {
+  margin-left: 8px;
+}
+
+.modules-right {
+  margin-right: 8px;
+}
+
+#workspaces button {
+  all: initial;
+  padding: 0 6px;
+  margin: 0 1.5px;
+  min-width: 9px;
+}
+
+#workspaces button.empty {
+  opacity: 0.5;
+}
+
+#cpu,
+#battery,
+#pulseaudio,
+#custom-omarchy,
+#custom-update {
+  min-width: 12px;
+  margin: 0 7.5px;
+}
+
+#tray {
+  margin-right: 16px;
+}
+
+#bluetooth {
+  margin-right: 17px;
+}
+
+#network {
+  margin-right: 13px;
+}
+
+#custom-expand-icon {
+  margin-right: 18px;
+}
+
+tooltip {
+  padding: 2px;
+}
+
+#custom-update {
+  font-size: 10px;
+}
+
+#clock {
+  margin-left: 8.75px;
+}
+
+.hidden {
+  opacity: 0;
+}
+
+#custom-screenrecording-indicator,
+#custom-idle-indicator,
+#custom-notification-silencing-indicator {
+  min-width: 12px;
+  margin-left: 5px;
+  margin-right: 0;
+  font-size: 10px;
+  padding-bottom: 1px;
+}
+
+#custom-screenrecording-indicator.active {
+  color: #a55555;
+}
+
+#custom-idle-indicator.active,
+#custom-notification-silencing-indicator.active {
+  color: #a55555;
+}
+
+#custom-voxtype {
+  min-width: 12px;
+  margin: 0 0 0 7.5px;
+}
+
+#custom-voxtype.recording {
+  color: #a55555;
+}
+
+#custom-weather {
+  margin-left: 7.5px;
+  margin-right: 7.5px;
+}
+
+#custom-weather.unavailable {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+#custom-gpu {
+  min-width: 12px;
+  margin: 0 7.5px;
+  font-size: 11px;
+}
+#custom-gpu.warm { color: #d49a4a; }
+#custom-gpu.hot  { color: #c14a4a; }
+
+#custom-scratchpad {
+  min-width: 12px;
+  margin: 0 7.5px;
+  font-size: 12px;
+}
+#custom-scratchpad.active {
+  color: #a3be8c;
+}
+#custom-scratchpad.inactive {
+  opacity: 0.45;
+}
+
+#custom-ccusage,
+#custom-codex-usage,
+#custom-opencode-usage {
+  min-width: 12px;
+  margin: 0 7.5px;
+  font-size: 11px;
+}
+#custom-ccusage { color: #8fbfdc; }
+#custom-codex-usage { color: #a3be8c; }
+#custom-opencode-usage { color: #b48ead; }
+#custom-ccusage.warm,
+#custom-codex-usage.warm,
+#custom-opencode-usage.warm { color: #d49a4a; }
+#custom-ccusage.hot,
+#custom-codex-usage.hot,
+#custom-opencode-usage.hot  { color: #c14a4a; }
+
+/* omarchy-spend burn-rate classes (aether tokens) */
+#custom-ccusage.hot  { background: #805f4a; color: #e5dfd9; animation: pulse 0.5s infinite alternate; }
+#custom-ccusage.warm { background: #767f59; color: #000000; }
+#custom-ccusage.quiet { background: transparent; color: #888082; }
+@keyframes pulse { from { opacity: 1.0; } to { opacity: 0.6; } }

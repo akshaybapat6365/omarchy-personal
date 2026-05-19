@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Floating AI scratchpad on a Hyprland special workspace.
+# Usage: omarchy-ai-scratchpad [claude|codex|opencode|hermes]
+# Each tool gets its own persistent alacritty + tmux session and special workspace.
+
+set -euo pipefail
+
+TOOL="${1:-claude}"
+
+case "$TOOL" in
+  claude)   CLASS="ai-claude";   WS="ai";          SESSION="claude";   CMD="claude" ;;
+  codex)    CLASS="ai-codex";    WS="ai-codex";    SESSION="codex";    CMD="codex" ;;
+  opencode) CLASS="ai-opencode"; WS="ai-opencode"; SESSION="opencode"; CMD="opencode" ;;
+  hermes)   CLASS="ai-hermes";   WS="ai-hermes";   SESSION="hermes";   CMD="hermes-yolo" ;;
+  *) echo "usage: $0 [claude|codex|opencode|hermes]"; exit 1 ;;
+esac
+
+# Spawn the scratchpad if no window with this class exists.
+if ! hyprctl clients -j | grep -q "\"class\": \"$CLASS\""; then
+  setsid alacritty --class "$CLASS" --title "$CLASS" \
+    -o "window.opacity=1.0" \
+    -o "colors.transparent_background_colors=false" \
+    -e bash -c "tmux new-session -A -s '$SESSION' '$CMD || bash'" \
+    >/dev/null 2>&1 &
+  for _ in {1..30}; do
+    sleep 0.1
+    if hyprctl clients -j | grep -q "\"class\": \"$CLASS\""; then break; fi
+  done
+fi
+
+hyprctl dispatch togglespecialworkspace "$WS"

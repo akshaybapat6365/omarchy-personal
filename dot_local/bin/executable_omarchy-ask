@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Spotlight-style /ask: type a question in a floating Alacritty, get answer in a notification + clipboard.
+
+set -euo pipefail
+
+TMP=$(mktemp)
+trap 'rm -f "$TMP"' EXIT
+
+# Floating Alacritty to capture the prompt. Hyprland window rule sizes it.
+alacritty --class ask-overlay --title "Ask Claude" \
+  -o "window.opacity=0.95" \
+  -o "window.decorations=None" \
+  -e bash -c "gum input --prompt '? ' --placeholder 'Ask Claude…' --width 80 > '$TMP'"
+
+PROMPT=$(<"$TMP")
+[[ -z "$PROMPT" ]] && exit 0
+
+notify-send -a "Claude" -t 4000 "Asking…" "$PROMPT"
+
+ANSWER=$(claude --print "$PROMPT" 2>&1 || echo "(claude error)")
+
+LOG="$HOME/.local/share/omarchy/ask-history.log"
+mkdir -p "$(dirname "$LOG")"
+{ printf '\n--- %s ---\nQ: %s\nA: %s\n' "$(date -Iseconds)" "$PROMPT" "$ANSWER"; } >>"$LOG"
+
+printf '%s' "$ANSWER" | wl-copy 2>/dev/null || true
+
+notify-send -a "Claude" -t 0 "Answer (copied to clipboard)" "${ANSWER:0:600}$([[ ${#ANSWER} -gt 600 ]] && echo "…")"

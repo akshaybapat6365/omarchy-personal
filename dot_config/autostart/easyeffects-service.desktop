@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=EasyEffects (service)
+Comment=PipeWire audio DSP for Dell XPS 9720 speakers — Apple-tuned EQ/limiter chain
+Exec=easyeffects --service-mode --load-preset DellXPS9720-Apple-Tuned
+Icon=easyeffects
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

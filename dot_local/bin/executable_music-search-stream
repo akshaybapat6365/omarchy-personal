@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mpd_socket="${MPD_HOST:-/home/akshaybapat/.local/state/mpd/socket}"
+play_now=1
+clear_queue=0
+hold=0
+limit=15
+first=0
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  music-search-stream [--queue] [--replace] [--hold] [--first] [query...]
+
+Search YouTube with yt-dlp, resolve a temporary audio stream URL, and hand that
+stream URL to MPD. This does not download the song.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --queue)
+      play_now=0
+      shift
+      ;;
+    --replace)
+      clear_queue=1
+      play_now=1
+      shift
+      ;;
+    --hold)
+      hold=1
+      shift
+      ;;
+    --first)
+      first=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+query="${*:-}"
+if [[ -z "$query" ]]; then
+  read -r -p "YouTube search: " query
+fi
+
+if [[ -z "$query" ]]; then
+  exit 0
+fi
+
+finish() {
+  local code="$1"
+  if [[ "$hold" -eq 1 ]]; then
+    printf '\nPress Enter to close...'
+    read -r _ || true
+  fi
+  exit "$code"
+}
+
+require() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf 'Missing required command: %s\n' "$1" >&2
+    finish 127
+  fi
+}
+
+require yt-dlp
+require jq
+require fzf
+require socat
+require mpc
+
+mpc_cmd() {
+  MPD_HOST="$mpd_socket" mpc "$@"
+}
+
+mpd_escape() {
+  local value="${1//$'\n'/ }"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s' "$value"
+}
+
+mpd_send() {
+  printf '%s\nclose\n' "$1" | socat - "UNIX-CONNECT:$mpd_socket"
+}
+
+systemctl --user start mpd.service >/dev/null 2>&1 || true
+
+printf 'Searching YouTube for: %s\n' "$query"
+json="$(yt-dlp -J --flat-playlist --no-warnings --no-progress "ytsearch${limit}:${query}")" || {
+  printf 'yt-dlp search failed.\n' >&2
+  finish 1
+}
+
+results="$(
+  jq -r '
+    def clean: tostring | gsub("[\t\r\n]+"; " ");
+    .entries[]
+    | select(.id and .title)
+    | [
+        (.title | clean),
+        ((.uploader // .channel // "YouTube") | clean),
+        ((.duration_string // ((.duration // 0) | tostring + "s")) | clean),
+        (if (.url | type) == "string" and (.url | startswith("http")) then .url else ("https://www.youtube.com/watch?v=" + .id) end)
+      ]
+    | @tsv
+  ' <<<"$json"
+)"
+
+if [[ -z "$results" ]]; then
+  printf 'No results.\n' >&2
+  finish 1
+fi
+
+if [[ "$first" -eq 1 ]]; then
+  selection="$(printf '%s\n' "$results" | sed -n '1p')"
+else
+  selection="$(
+    printf '%s\n' "$results" |
+      fzf --prompt='stream> ' \
+          --height=100% \
+          --delimiter=$'\t' \
+          --with-nth=1,2,3 \
+          --preview='printf "Title: %s\nArtist: %s\nLength: %s\nURL: %s\n" {1} {2} {3} {4}' \
+          --preview-window=down,4,border-top
+  )" || finish 0
+fi
+
+IFS=$'\t' read -r title uploader duration watch_url <<<"$selection"
+
+printf 'Resolving stream URL...\n'
+stream_url="$(
+  yt-dlp --no-playlist --no-warnings --no-progress \
+    -f 'bestaudio[ext=m4a]/bestaudio/best' \
+    -g "$watch_url" | head -n 1
+)" || {
+  printf 'Could not resolve a playable stream URL.\n' >&2
+  finish 1
+}
+
+if [[ -z "$stream_url" ]]; then
+  printf 'yt-dlp returned an empty stream URL.\n' >&2
+  finish 1
+fi
+
+if [[ "$clear_queue" -eq 1 ]]; then
+  mpc_cmd clear >/dev/null || true
+fi
+
+escaped_url="$(mpd_escape "$stream_url")"
+resp="$(mpd_send "addid \"$escaped_url\"")"
+song_id="$(awk '/^Id: /{print $2; exit}' <<<"$resp")"
+
+if [[ -z "${song_id:-}" ]]; then
+  printf 'MPD did not return a song id.\n%s\n' "$resp" >&2
+  finish 1
+fi
+
+mpd_send "addtagid $song_id Title \"$(mpd_escape "$title")\"" >/dev/null || true
+mpd_send "addtagid $song_id Artist \"$(mpd_escape "$uploader")\"" >/dev/null || true
+mpd_send "addtagid $song_id Comment \"$(mpd_escape "YouTube stream: $watch_url")\"" >/dev/null || true
+
+if [[ "$play_now" -eq 1 ]]; then
+  mpd_send "playid $song_id" >/dev/null || true
+fi
+
+printf 'Streaming: %s\n' "$title"
+mpc_cmd status || true
+finish 0

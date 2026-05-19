@@ -1,0 +1,44 @@
+# rinertia: macOS-style momentum scrolling for the ELAN trackpad on this XPS 17.
+# Hyprland's input:touchpad:scroll_factor handles per-finger-mm rate;
+# rinertia adds the coast-and-decay tail when fingers lift.
+
+[device]
+# Auto-detect: this touchpad is "VEN_04F3:00 04F3:311C Touchpad",
+# the only pointer+gesture device on the system.
+
+[scroll]
+enabled = true
+
+# Apple's time-constant style decay (closest to macOS feel)
+damping_curve = "macos"
+# Was 320 — bumped to 400 (real macOS decay range is 400-450ms).
+time_constant_ms = 400.0
+# Was 100 — macOS uses 0.1-0.5. 25 was the highest value that still feels
+# like real coast vs cliff-edge stop. THE PRIMARY LEVER for "carries longer."
+stop_threshold = 25.0
+
+# Match natural-scroll=true in Hyprland so direction is consistent
+natural_scroll = true
+
+# Match Hyprland's input:touchpad:scroll_factor (bumped to 0.5 — the 0.2
+# was too slow, made flicks scroll a tiny amount).
+scroll_factor = 0.5
+
+# Smooth glide-to-stop: emit minimal-magnitude hires events for 200ms after the
+# main decel finishes, instead of an abrupt last-event cutoff.
+tail_scroll_ms = 250
+
+# Use a longer velocity sampling window so the velocity at lift is averaged
+# over more samples — reduces jittery start-of-tail.
+velocity_stale_ms = 250
+
+# Pause momentum when more than one finger is on the pad — keeps pinch/swipe
+# gestures from being polluted by inertial scroll events.
+multitouch_cooldown = 500
+# Was 120 — too high; quick light flicks (~50-100 px/sec) fell below threshold
+# and got no momentum → abrupt stop "frozen up" feel. 60 catches most flicks.
+min_velocity = 60.0
+
+[pointer]
+# Inertia for cursor itself feels weird on a tiling WM; leave off.
+enabled = false

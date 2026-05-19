@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# doctor — health check for omarchy-personal. Reports state of the stack.
+# Run from anywhere; locates chezmoi source via `chezmoi source-path`.
+
+set -u
+GREEN=$'\033[1;32m'; RED=$'\033[1;31m'; YELLOW=$'\033[1;33m'; BLUE=$'\033[1;34m'; NC=$'\033[0m'
+ok()   { printf '%s✓%s %s\n' "$GREEN" "$NC" "$*"; }
+fail() { printf '%s✗%s %s\n' "$RED"   "$NC" "$*"; }
+warn() { printf '%s!%s %s\n' "$YELLOW" "$NC" "$*"; }
+header() { printf '\n%s== %s ==%s\n' "$BLUE" "$*" "$NC"; }
+
+# --- core CLI ---
+header "Core tooling"
+for t in chezmoi paru pacman git gh op age metapac mise; do
+  if command -v "$t" >/dev/null 2>&1; then
+    ok "$t: $(command -v "$t")"
+  else
+    fail "$t: not on PATH"
+  fi
+done
+
+# --- chezmoi state ---
+header "chezmoi"
+if command -v chezmoi >/dev/null 2>&1; then
+  SRC=$(chezmoi source-path 2>/dev/null || echo "")
+  if [ -n "$SRC" ] && [ -d "$SRC" ]; then
+    ok "source path: $SRC"
+  else
+    fail "source path resolves to nothing"
+  fi
+  DIFF=$(chezmoi diff 2>&1 | wc -l)
+  if [ "$DIFF" -eq 0 ]; then ok "diff: clean (no pending changes)"
+  else                       warn "diff: $DIFF lines of pending changes (run: chezmoi diff)"
+  fi
+fi
+
+# --- metapac state ---
+header "metapac"
+if command -v metapac >/dev/null 2>&1 && [ -f "$HOME/.local/share/chezmoi/metapac/metapac.toml" ]; then
+  cd "$HOME/.local/share/chezmoi/metapac" || true
+  MISSING=$(metapac unmanaged --config metapac.toml 2>/dev/null | wc -l)
+  ok "metapac config present; $MISSING unmanaged pkgs (consider adding to a group)"
+else
+  warn "metapac not configured yet"
+fi
+
+# --- systemd user services this user expects ---
+header "systemd user services"
+EXPECTED=(aether-bg-watcher espanso fusuma mpd mpd-mpris rinertia wireplumber)
+for s in "${EXPECTED[@]}"; do
+  if systemctl --user is-enabled "$s.service" >/dev/null 2>&1; then ok "$s.service enabled"
+  else warn "$s.service not enabled"
+  fi
+done
+
+# --- theme ---
+header "omarchy theme"
+if [ -L "$HOME/.config/omarchy/current/theme" ]; then
+  THEME=$(basename "$(readlink "$HOME/.config/omarchy/current/theme")")
+  ok "active theme: $THEME"
+else
+  warn "no active theme symlink at ~/.config/omarchy/current/theme"
+fi
+
+# --- fonts ---
+header "fonts"
+if fc-list 2>/dev/null | grep -qi "JetBrainsMono Nerd"; then ok "JetBrainsMono Nerd Font installed"
+else fail "JetBrainsMono Nerd Font missing"
+fi
+if fc-list 2>/dev/null | grep -qi "Inter Variable"; then ok "Inter installed"
+else warn "Inter font missing (cosmetic — UI falls back to system sans)"
+fi
+
+# --- gh auth ---
+header "GitHub CLI"
+if command -v gh >/dev/null 2>&1; then
+  if gh auth status >/dev/null 2>&1; then
+    ok "gh CLI authenticated as: $(gh api user --jq .login 2>/dev/null || echo unknown)"
+  else
+    warn "gh CLI not authenticated — run: gh auth login"
+  fi
+fi
+
+# --- 1Password ---
+header "1Password CLI"
+if command -v op >/dev/null 2>&1; then
+  if op whoami >/dev/null 2>&1; then ok "op signed in as: $(op whoami 2>/dev/null | grep -oE '@.*' | head -1)"
+  else warn "op not signed in — run: eval \$(op signin)"
+  fi
+fi
+
+# --- ai-config external ---
+header "ai-config external"
+if [ -d "$HOME/.local/share/ai-config/.git" ]; then
+  ok "ai-config present"
+  cd "$HOME/.local/share/ai-config" && (git fetch --quiet 2>/dev/null; HEAD=$(git rev-parse --short HEAD); UP=$(git rev-parse --short origin/main 2>/dev/null || git rev-parse --short origin/master 2>/dev/null); ok "head: $HEAD origin: ${UP:-?}")
+else
+  warn "ai-config not present at ~/.local/share/ai-config (will be pulled by chezmoi external)"
+fi
+
+echo ""
+echo "Done."

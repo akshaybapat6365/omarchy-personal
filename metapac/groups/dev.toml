@@ -1,0 +1,21 @@
+# metapac group: dev
+# Auto-generated 2026-05-18 from pacman -Qen + pacman -Qem
+
+[arch]
+clang = "*"
+cmake = "*"
+docker = "*"
+docker-buildx = "*"
+docker-compose = "*"
+dotnet-runtime-9.0 = "*"
+go = "*"
+llvm = "*"
+mise = "*"
+python-gobject = "*"
+python-pillow = "*"
+python-pipx = "*"
+python-poetry-core = "*"
+python-pyqt6 = "*"
+python-terminaltexteffects = "*"
+python-yaml = "*"
+rust = "*"
