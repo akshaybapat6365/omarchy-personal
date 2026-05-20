@@ -99,8 +99,11 @@ if command -v chezmoi >/dev/null 2>&1; then
   else
     rfail "chezmoi" "source_path" "source path resolves to nothing"
   fi
-  DIFF=$(chezmoi diff 2>&1 | wc -l)
-  if [ "$DIFF" -eq 0 ]; then
+  DIFF=$(timeout 8 chezmoi diff 2>&1 | wc -l) || true
+  DIFF_EXIT=${PIPESTATUS[0]}
+  if [ "$DIFF_EXIT" -eq 124 ]; then
+    rwarn "chezmoi" "diff" "diff: timed out (age passphrase prompt?) — run manually: chezmoi diff"
+  elif [ "$DIFF" -eq 0 ]; then
     rok "chezmoi" "diff" "diff: clean (no pending changes)"
   else
     rwarn "chezmoi" "diff" "diff: $DIFF lines of pending changes (run: chezmoi diff)"

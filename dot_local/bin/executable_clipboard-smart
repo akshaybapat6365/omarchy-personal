@@ -1,29 +1,36 @@
 #!/usr/bin/env bash
-# clipboard-smart {copy|paste} -- per-app universal clipboard.
+# clipboard-smart {copy|paste} — universal copy/paste via keystroke synthesis.
 #
-# REWRITE: terminal copy is keystroke-free. Modern terminals auto-populate
-# the X11-style PRIMARY selection on mouse-select. We just read PRIMARY and
-# write to the standard CLIPBOARD via wl-copy. Zero synthetic keystrokes,
-# no Ghostty/wlr-virtual-keyboard interaction, no race conditions.
+# v4 (2026-05-19): replaced the PRIMARY-only terminal copy path with proper
+# Ctrl+Shift+C / Ctrl+Shift+V keystroke synthesis. The previous design relied
+# on the user mouse-selecting text first; keyboard-only flows silently failed.
 #
-# For non-terminals, fall back to Hyprland's sendshortcut Ctrl+Insert /
-# Shift+Insert (the original Omarchy "universal" approach, which works for
-# browsers / editors / electron apps).
+# Routes:
+#   copy  in terminal  → hyprctl sendshortcut CTRL+SHIFT+C (kitty/ghostty/
+#                        alacritty/foot/wezterm all bind this to copy-selection)
+#                        + bridge PRIMARY→CLIPBOARD as a safety net if Ctrl+
+#                        Shift+C didn't update clipboard (e.g. no selection).
+#   copy  non-terminal → hyprctl sendshortcut CTRL+C (universal).
+#   paste in terminal  → hyprctl sendshortcut CTRL+SHIFT+V.
+#   paste non-terminal → hyprctl sendshortcut CTRL+V.
 #
-# INSTRUMENTED: appends to /tmp/desktop-debug.log on every invocation.
+# A 90 ms sleep before the synthesized keystroke lets the user's held Super
+# release first so the app doesn't see Super+Ctrl+Shift+C.
+#
+# Instrumented to /tmp/desktop-debug.log on every invocation.
 
+set -uo pipefail
 LOG=/tmp/desktop-debug.log
 ts() { date +'%H:%M:%S.%3N'; }
 log() { printf '[%s] clipboard-smart %s\n' "$(ts)" "$*" >> "$LOG"; }
 
-set -uo pipefail
 mode="${1:-}"
 [[ -z "$mode" ]] && { log "ERROR: no mode arg"; echo "usage: clipboard-smart {copy|paste}" >&2; exit 1; }
-log "START mode=$mode pid=$$"
+log "v4 START mode=$mode pid=$$"
 
 raw_class=$(hyprctl activewindow -j 2>>"$LOG" | jq -r '.class // ""' 2>>"$LOG")
 class=$(printf '%s' "$raw_class" | tr '[:upper:]' '[:lower:]')
-log "active.class.raw='$raw_class' class.lower='$class'"
+log "active.class='$raw_class' (lower='$class')"
 
 is_terminal=0
 case "$class" in
@@ -34,144 +41,75 @@ case "$class" in
 esac
 log "is_terminal=$is_terminal"
 
+# Wait for the user's held Super key to release before we synthesize keystrokes
+# with modifiers. 90 ms is conservative; faster typists may need less.
+sleep 0.09
+
 case "$mode" in
     copy)
-        copy_route=""
-        copy_bytes=""
         if (( is_terminal )); then
-            # Terminal copy: read PRIMARY (auto-populated on mouse-select)
-            # and copy to CLIPBOARD. No keystrokes synthesized.
-            primary=$(wl-paste --primary --no-newline 2>>"$LOG")
-            if [[ -n "$primary" ]]; then
-                copy_route="primary-to-clipboard"
-                copy_bytes=${#primary}
+            # Capture clipboard state before our keystroke so we can detect whether
+            # Ctrl+Shift+C actually updated it.
+            before=$(wl-paste --no-newline 2>>"$LOG" || true)
+
+            log "RUN sendshortcut CTRL SHIFT, C (terminal)"
+            hyprctl dispatch sendshortcut "CTRL SHIFT, C," >>"$LOG" 2>&1
+            rc=$?
+
+            # Give the terminal/wl-clipboard a moment to commit the new content.
+            sleep 0.07
+
+            after=$(wl-paste --no-newline 2>>"$LOG" || true)
+            primary=$(wl-paste --primary --no-newline 2>>"$LOG" || true)
+
+            # If clipboard didn't change but PRIMARY has fresh content, bridge it.
+            # This covers terminals where Ctrl+Shift+C had no selection to copy
+            # but the user did mouse-select something (PRIMARY-only).
+            if [[ "$after" == "$before" && -n "$primary" && "$primary" != "$before" ]]; then
                 printf '%s' "$primary" | wl-copy
                 rc=$?
-                log "RUN copy via $copy_route   bytes=$copy_bytes   rc=$rc"
-            else
-                copy_route="primary-empty"
-                log "NO-OP: PRIMARY selection is empty (user must mouse-select first)"
-                notify-send -t 1500 "Clipboard" "Select text first (no primary selection)" 2>/dev/null
-                rc=0
+                log "fallback bridge: PRIMARY → CLIPBOARD (${#primary} bytes)"
+                after=$primary
             fi
+
+            bytes=${#after}
+            if [[ -n "$after" ]]; then
+                notify-send -t 700 "Copied" "$bytes chars" 2>/dev/null
+            else
+                notify-send -t 1500 "Copy" "Nothing to copy — select text first" 2>/dev/null
+            fi
+            log "copy rc=$rc bytes=$bytes"
         else
-            # Non-terminal: keep universal copy via Hyprland sendshortcut.
-            # Do not read clipboard contents back; logs stay metadata-only.
-            copy_route="sendshortcut ctrl+insert (non-terminal)"
-            log "RUN copy via $copy_route"
-            hyprctl dispatch sendshortcut "CTRL, Insert," >>"$LOG" 2>&1
+            log "RUN sendshortcut CTRL, C (non-terminal)"
+            hyprctl dispatch sendshortcut "CTRL, C," >>"$LOG" 2>&1
             rc=$?
-            sleep 0.08
-            log "copy rc=$rc"
-        fi
-        if [[ "$rc" -eq 0 && -n "$copy_bytes" ]]; then
-            notify-send -t 900 "Copied ($copy_bytes chars)" "via $copy_route" 2>/dev/null
-        elif [[ "$rc" -eq 0 && "$copy_route" != "primary-empty" ]]; then
-            notify-send -t 900 "Copy requested" "via $copy_route" 2>/dev/null
+            sleep 0.05
+            bytes=$(wl-paste --no-newline 2>>"$LOG" | wc -c)
+            notify-send -t 700 "Copied" "${bytes} chars" 2>/dev/null
+            log "copy rc=$rc bytes=$bytes"
         fi
         ;;
-    paste)
-        # Terminal paste — REWRITE v3 (2026-05-11).
-        #
-        # Problem with v2 (PTY-direct bracketed paste): write goes to the
-        # FOREGROUND process of the PTY, not to the shell. When you run a
-        # TUI inside the terminal (claude-code, vim, less, lazydocker, etc.),
-        # the foreground process is the TUI, and the bracketed-paste markers
-        # ESC[200~ / ESC[201~ get consumed by whatever input parser that TUI
-        # uses — frequently NOT readline. Result: bytes vanish.
-        #
-        # New strategy:
-        #   1. Detect the foreground process of the terminal's PTY via tpgid.
-        #   2. If foreground is a known shell (bash/zsh/fish/sh/dash/ash) the
-        #      PTY-direct bracketed-paste path is correct — readline handles
-        #      it, no command execution from newlines.
-        #   3. Otherwise (TUI, foreign program, multi-pane tmux) hand off to
-        #      Ghostty's NATIVE paste binding via `sendshortcut SHIFT, Insert`.
-        #      Ghostty's `shift+insert=paste_from_clipboard` triggers the
-        #      compositor-side paste which wraps the data in bracketed-paste
-        #      AT THE TERMINAL LAYER, so whatever's inside (claude-code,
-        #      tmux, vim) sees correctly-framed paste input that its TUI
-        #      library decoded properly. 100 ms sleep so the user's held
-        #      Super gets released before we synthesize Shift+Insert.
-        #   4. wtype stays as a last-resort fallback.
-        #
-        # Non-terminal apps still go via sendshortcut SHIFT, Insert — every
-        # GTK/Qt/Electron app honors Shift+Insert as paste.
-        content=$(wl-paste --no-newline 2>>"$LOG")
-        bytes=${#content}
-        path_used=""
 
-        if [[ -z "$content" ]]; then
+    paste)
+        bytes=$(wl-paste --no-newline 2>>"$LOG" | wc -c)
+        if (( bytes == 0 )); then
             log "NO-OP: clipboard empty"
             notify-send -t 1500 "Paste" "Clipboard is empty" 2>/dev/null
             rc=0
         elif (( is_terminal )); then
-            # Resolve PTY + foreground process.
-            app_pid=$(hyprctl activewindow -j 2>>"$LOG" | jq -r '.pid // empty')
-            shell_pid=""
-            pty=""
-            fg_comm=""
-            if [[ -n "$app_pid" && "$app_pid" != "0" ]]; then
-                shell_pid=$(pgrep -P "$app_pid" 2>>"$LOG" | head -1)
-                [[ -z "$shell_pid" ]] && shell_pid="$app_pid"
-                candidate=$(readlink "/proc/$shell_pid/fd/0" 2>>"$LOG")
-                if [[ "$candidate" == /dev/pts/* && -w "$candidate" ]]; then
-                    pty="$candidate"
-                fi
-                tpgid=$(awk '{print $8}' "/proc/$shell_pid/stat" 2>>"$LOG")
-                if [[ -n "$tpgid" && "$tpgid" -gt 0 ]]; then
-                    fg_comm=$(cat "/proc/$tpgid/comm" 2>>"$LOG")
-                fi
-            fi
-            log "resolved app_pid=$app_pid shell_pid=$shell_pid pty=$pty fg_comm='$fg_comm'"
-
-            case "$fg_comm" in
-                bash|zsh|fish|sh|dash|ash)
-                    # Shell prompt: PTY-direct bracketed paste is ideal.
-                    if [[ -n "$pty" ]]; then
-                        path_used="pty-bracketed (fg=$fg_comm)"
-                        log "RUN paste via $path_used   pty=$pty   bytes=$bytes"
-                        printf '\033[200~%s\033[201~' "$content" > "$pty"
-                        rc=$?
-                    else
-                        path_used="sendshortcut (pty-unknown, fg=$fg_comm)"
-                        log "RUN paste via $path_used   bytes=$bytes"
-                        sleep 0.10
-                        hyprctl dispatch sendshortcut "SHIFT, Insert," >>"$LOG" 2>&1
-                        rc=$?
-                    fi
-                    ;;
-                *)
-                    # TUI / unknown foreground: let the TERMINAL handle the
-                    # paste so its native bracketed-paste wrapping is in
-                    # effect for whatever TUI is running.
-                    path_used="sendshortcut shift+insert (fg='$fg_comm')"
-                    log "RUN paste via $path_used   bytes=$bytes"
-                    # Wait long enough for the user's Super+V keypress to
-                    # release, so the synthesized Shift+Insert isn't observed
-                    # as Super+Shift+Insert by the app.
-                    sleep 0.10
-                    hyprctl dispatch sendshortcut "SHIFT, Insert," >>"$LOG" 2>&1
-                    rc=$?
-                    ;;
-            esac
-            log "paste rc=$rc"
-        else
-            path_used="sendshortcut shift+insert (non-terminal)"
-            log "RUN paste via $path_used   bytes=$bytes"
-            sleep 0.10
-            hyprctl dispatch sendshortcut "SHIFT, Insert," >>"$LOG" 2>&1
+            log "RUN sendshortcut CTRL SHIFT, V (terminal, $bytes bytes pending)"
+            hyprctl dispatch sendshortcut "CTRL SHIFT, V," >>"$LOG" 2>&1
             rc=$?
+            notify-send -t 700 "Pasted" "$bytes chars" 2>/dev/null
+        else
+            log "RUN sendshortcut CTRL, V (non-terminal, $bytes bytes pending)"
+            hyprctl dispatch sendshortcut "CTRL, V," >>"$LOG" 2>&1
+            rc=$?
+            notify-send -t 700 "Pasted" "$bytes chars" 2>/dev/null
         fi
-
-        # Post-paste notification: includes the route used so when something
-        # breaks again you can see at a glance which branch fired.
-        if [[ "$rc" -eq 0 && -n "$content" ]]; then
-            notify-send -t 900 "Pasted ($bytes chars)" "via $path_used" 2>/dev/null
-        elif [[ -n "$content" ]]; then
-            notify-send -t 2500 "Paste FAILED (rc=$rc)" "via $path_used — check /tmp/desktop-debug.log" 2>/dev/null
-        fi
+        log "paste rc=$rc"
         ;;
+
     *)
         log "ERROR: unknown mode '$mode'"
         echo "usage: clipboard-smart {copy|paste}" >&2; exit 1 ;;
