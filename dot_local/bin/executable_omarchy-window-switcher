@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# omarchy-window-switcher — Mission Control-style window picker.
+#
+# Lists every mapped window across all workspaces (formatted as
+# "WS · CLASS · TITLE"), shows them in walker's dmenu, and focuses
+# the chosen one via hyprctl dispatch focuswindow address:<addr>.
+#
+# Used as the 3-finger-swipe-up target while hyprexpo is unavailable
+# upstream (Arch hyprland 0.54.3-4 ABI hash mismatch — re-evaluate
+# when 0.54.3-5 lands). Replaces the previous generic launchpad path.
+#
+# Why this exists vs hyprexpo: hyprexpo renders thumbnail tiles of
+# workspaces. With hyprexpo gone we can't render thumbnails, but we
+# can give the same "see-everything, jump-anywhere" workflow with a
+# text list — which is what people actually use Mission Control for
+# 90% of the time.
+set -euo pipefail
+
+# Build entries: "WS · CLASS · TITLE" separated by tab from address.
+# String interpolation keeps `.` referring to the source object so
+# `\(.address)` resolves correctly. Sort by workspace id ascending so
+# windows on ws 1 appear first, ws 2 next, etc.
+entries=$(hyprctl clients -j 2>/dev/null | jq -r '
+    sort_by(.workspace.id) |
+    .[] | select(.mapped and (.hidden|not) and (.title != "")) |
+    "ws \(.workspace.id) · \(.class) · \(.title)\t\(.address)"
+')
+
+[[ -z "$entries" ]] && { notify-send -u low "Window switcher" "no windows open"; exit 0; }
+
+# Show via walker dmenu mode (-d) with index suppression so we get the
+# tab-separated address back as raw text. Wide enough for long titles.
+pick=$(printf '%s\n' "$entries" \
+  | walker --dmenu --placeholder " Switch to window…" \
+           --width 800 --maxheight 600 --minheight 200 \
+           --nohints --selectsingle 2>/dev/null)
+
+[[ -z "$pick" ]] && exit 0
+
+# pick is "WS · CLASS · TITLE\tADDRESS" — extract address after the tab
+addr=$(printf '%s' "$pick" | awk -F'\t' '{print $NF}')
+[[ -z "$addr" ]] && { notify-send -u low "Window switcher" "no address parsed from selection"; exit 1; }
+
+exec hyprctl dispatch focuswindow "address:$addr" >/dev/null

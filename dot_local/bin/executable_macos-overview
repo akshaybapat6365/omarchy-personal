@@ -3,8 +3,10 @@
 #
 # Usage:  macos-overview up | macos-overview down
 #
-# up:   toggle Mission Control (hyprexpo overview). Falls back to walker
-#       (Launchpad-like grid) when hyprexpo isn't loaded.
+# up:   toggle Mission Control (hyprexpo overview). When hyprexpo isn't
+#       loaded, opens the cross-workspace window switcher
+#       (omarchy-window-switcher) — text-list approximation of Mission
+#       Control while hyprexpo is upstream-blocked.
 # down: if overview is open, dismiss it (macOS swipe-down-to-return).
 #       Otherwise toggle scratchpad (App Exposé approximation).
 #
@@ -29,12 +31,18 @@ log() { printf '[%s] macos-overview %s\n' "$(ts)" "$*" >> "$LOG"; }
 dir="${1:-up}"
 log "START pid=$$ dir=$dir"
 
-# Plugin not loaded: graceful fallbacks so the gesture still does something.
+# hyprexpo is upstream-blocked on Arch hyprland 0.54.3-4 (ABI hash mismatch
+# from the May 4 2026 lib upgrade; rebuilds fail with "[he] Version
+# mismatch"). Until 0.54.3-5 lands, the gesture is wired to a functional
+# Mission Control approximation:
+#   3-up   -> omarchy-window-switcher (text list of every window, jump-to)
+#   3-down -> scratchpad toggle
+# Both are direct hyprctl primitives — no plugin dependency, no crash risk.
 if ! hyprctl plugin list 2>/dev/null | grep -q hyprexpo; then
     case "$dir" in
         up)
-            log "hyprexpo absent on UP -> walker (launchpad-like)"
-            exec omarchy-launch-walker
+            log "hyprexpo absent on UP -> omarchy-window-switcher"
+            exec omarchy-window-switcher
             ;;
         down)
             log "hyprexpo absent on DOWN -> scratchpad"
