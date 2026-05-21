@@ -3,12 +3,17 @@
 #
 # Usage:  macos-overview up | macos-overview down
 #
-# up:   toggle Mission Control (hyprexpo overview). When hyprexpo isn't
-#       loaded, opens the cross-workspace window switcher
-#       (omarchy-window-switcher) — text-list approximation of Mission
-#       Control while hyprexpo is upstream-blocked.
-# down: if overview is open, dismiss it (macOS swipe-down-to-return).
-#       Otherwise toggle scratchpad (App Exposé approximation).
+# up:   toggle Mission Control. Resolution order:
+#         1. quickshell-overview daemon (`qs -c overview`) if running —
+#            visual workspace overview with live window thumbnails,
+#            drag-and-drop, glass effects. The primary path since
+#            installing quickshell-overview-git on 2026-05-21.
+#         2. hyprexpo plugin if loaded — historic primary, blocked
+#            upstream until Arch ships hyprland 0.54.3-5.
+#         3. omarchy-window-switcher (text list via walker dmenu) —
+#            emergency fallback only.
+# down: if hyprexpo overview is open, dismiss it. Otherwise toggle
+#       scratchpad (App Exposé approximation).
 #
 # Bound from:
 #   ~/.config/hypr/input.conf   gesture = 3, up   -> macos-overview up
@@ -31,21 +36,36 @@ log() { printf '[%s] macos-overview %s\n' "$(ts)" "$*" >> "$LOG"; }
 dir="${1:-up}"
 log "START pid=$$ dir=$dir"
 
-# hyprexpo is upstream-blocked on Arch hyprland 0.54.3-4 (ABI hash mismatch
-# from the May 4 2026 lib upgrade; rebuilds fail with "[he] Version
-# mismatch"). Until 0.54.3-5 lands, the gesture is wired to a functional
-# Mission Control approximation:
-#   3-up   -> omarchy-window-switcher (text list of every window, jump-to)
-#   3-down -> scratchpad toggle
-# Both are direct hyprctl primitives — no plugin dependency, no crash risk.
+# PRIMARY: quickshell-overview daemon. Installed 2026-05-21, supersedes
+# the old walker-dmenu emergency fallback. Detection: pgrep for the
+# daemon's command line (`qs -c overview`).
+if pgrep -f 'qs -c overview' >/dev/null 2>&1; then
+    case "$dir" in
+        up)
+            log "qs-overview daemon detected on UP -> qs-overview toggle"
+            exec qs-overview toggle
+            ;;
+        down)
+            log "qs-overview daemon detected on DOWN -> qs-overview toggle"
+            # Same daemon — toggle either opens or closes regardless of dir.
+            exec qs-overview toggle
+            ;;
+    esac
+fi
+
+# SECONDARY (legacy / future): hyprexpo plugin. Upstream-blocked on Arch
+# hyprland 0.54.3-4 (ABI hash mismatch after May 4 2026 lib upgrade;
+# rebuilds emit "[he] Version mismatch"). When 0.54.3-5 lands and
+# hyprexpo is reinstalled, this branch reactivates automatically.
+# TERTIARY: omarchy-window-switcher (text-list emergency only).
 if ! hyprctl plugin list 2>/dev/null | grep -q hyprexpo; then
     case "$dir" in
         up)
-            log "hyprexpo absent on UP -> omarchy-window-switcher"
+            log "no overview daemon and no hyprexpo -> omarchy-window-switcher"
             exec omarchy-window-switcher
             ;;
         down)
-            log "hyprexpo absent on DOWN -> scratchpad"
+            log "no overview daemon and no hyprexpo on DOWN -> scratchpad"
             exec hyprctl dispatch togglespecialworkspace scratchpad
             ;;
     esac
