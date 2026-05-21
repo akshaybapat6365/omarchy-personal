@@ -10,11 +10,9 @@
   [".local/share/ai-config".pull]
     args = ["--ff-only"]
 
-[".config/quickshell"]
-  type = "git-repo"
-  url  = "https://github.com/bjarneo/quickshell.git"
-  refreshPeriod = "168h"
-  [".config/quickshell".clone]
-    args = ["--depth", "1"]
-  [".config/quickshell".pull]
-    args = ["--ff-only"]
+# bjarneo/quickshell external removed 2026-05-21 — researched as a candidate
+# Mission Control overview, but it's a widget pack (music notifier + top bar
+# that REPLACES waybar) with no workspace-overview module. Replaced by AUR
+# quickshell-overview-git (Shanu-Kumawat/quickshell-overview), package-
+# managed via metapac/groups/misc.toml and overlaid with the user config at
+# dot_config/quickshell/overview/config.json.
